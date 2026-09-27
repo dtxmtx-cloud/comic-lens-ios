@@ -9,12 +9,15 @@ struct OCRSegment: Sendable {
     /// Vision coordinates: normalized, origin at bottom-left.
     let box: CGRect
     let kind: OCRBlockKind
+    let lines: [OCRLine]
 
-    init(index: Int, source: String, box: CGRect, kind: OCRBlockKind = .speech) {
+    init(index: Int, source: String, box: CGRect, kind: OCRBlockKind = .speech,
+         lines: [OCRLine] = []) {
         self.index = index
         self.source = source
         self.box = box
         self.kind = kind
+        self.lines = lines
     }
 }
 
@@ -26,6 +29,7 @@ struct TranslationEntry: Identifiable {
     let japanese: String?
     let box: CGRect
     let kind: OCRBlockKind
+    let lines: [OCRLine]
 }
 
 struct TranslationOverlay: Identifiable {
