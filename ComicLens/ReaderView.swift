@@ -122,8 +122,8 @@ struct ReaderView: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
+            .frame(height: 34)
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
             Button {
                 showDiagnostics.toggle()
             } label: {
@@ -139,13 +139,16 @@ struct ReaderView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 6)
             if showDiagnostics {
-                Text(model.diagnostics)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+                ScrollView(.vertical) {
+                    Text(model.diagnostics)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(height: 52)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
         }
         .background(Color(uiColor: .systemBackground))
