@@ -74,6 +74,13 @@ Apple documentation: [Distribute to registered devices](https://developer.apple.
 | `OnDeviceTranslator.swift` | Foundation Models availability check, numbered per-page Japanese translation with fallback |
 | `DemoPage.swift` | Original text-only comic fixture for testing without Kindle |
 
-Requirements: iOS 26+, a device with Apple Intelligence enabled for actual AI translation. iOS simulator compilation is independent of AI runtime availability.
+Requirements: iOS 26.4+, a device with Apple Intelligence enabled for generative translation. The app also supports Apple’s dedicated low-latency Translation framework after the English/Japanese language pack has been installed. iOS simulator compilation is independent of AI runtime availability.
 
 Apple references: [Foundation Models](https://developer.apple.com/documentation/foundationmodels), [WKWebView snapshots](https://developer.apple.com/documentation/webkit/wkwebview/takesnapshot%28with%3Acompletionhandler%3A%29), [Vision text recognition](https://developer.apple.com/documentation/vision/vnrecognizetextrequest).
+
+## Translation and overlay behavior
+
+* Comic dialogue is processed independently. If the generative language model declines one block, its original English remains visible instead of discarding all other translations.
+* When English/Japanese low-latency language resources are installed, the native Translation framework may translate blocks that the generative engine did not complete. Use **言語準備** in the app to authorize/download the language resources. This is a separate, on-device system translation service, not a change to Foundation Models guardrails. The diagnostics report AI translations, dedicated translator translations, and blocks left in English.
+* Translation text is measured before display and clipped inside an actual UIView container. If a whole translation cannot fit legibly in its recognized text block, the patch is omitted rather than covering artwork; read it through **訳文一覧**. The full-text sheet also lists blocks that remain in English.
+* Text blocks are not exact speech-balloon contours. Cover typography and credits may still be recognized as text; page-specific OCR and bubble segmentation require further work.
