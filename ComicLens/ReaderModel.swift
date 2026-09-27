@@ -6,11 +6,14 @@ import Vision
 import WebKit
 
 @MainActor
-final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
+final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
     static let kindleURL = "https://read.amazon.co.jp/landing"
 
-    let webView: WKWebView
+    @Published private(set) var webView: WKWebView
+    @Published private(set) var tabDepth = 0
+    @Published var diagnostics = "画面: 未取得 / OCR: 未実行 / AI: 未確認"
     private let translator = OnDeviceTranslator()
+    private var previousTabs: [(view: WKWebView, isDemo: Bool)] = []
 
     @Published var overlays: [TranslationOverlay] = []
     @Published var isWorking = false
@@ -37,9 +40,14 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
-        webView.navigationDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
+        configure(webView)
         openHome()
+    }
+
+    private func configure(_ view: WKWebView) {
+        view.navigationDelegate = self
+        view.uiDelegate = self
+        view.allowsBackForwardNavigationGestures = true
     }
 
     func startMonitoring() {
@@ -83,6 +91,19 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
 
     func back() {
         if webView.canGoBack { webView.goBack() }
+        else if tabDepth > 0 { closeCurrentTab() }
+    }
+
+    func closeCurrentTab() {
+        guard let previous = previousTabs.popLast() else { return }
+        webView.stopLoading()
+        webView = previous.view
+        demoMode = previous.isDemo
+        tabDepth = previousTabs.count
+        resetForPageChange()
+        currentAddress = demoMode ? "COMIC LENS / DEMO" : (webView.url?.absoluteString ?? Self.kindleURL)
+        status = "前のタブに戻りました。"
+        if autoTranslate { requestTranslation() }
     }
 
     func forward() {
@@ -110,6 +131,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
         generation += 1
         overlays = []
         lastFingerprint = nil
+        diagnostics = "画面: 未取得 / OCR: 未実行 / AI: \(translator.readinessMessage)"
     }
 
     private func snapshot() async throws -> UIImage {
@@ -128,8 +150,12 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     private func scan(force: Bool) async {
-        guard !isWorking, !webView.isLoading, webView.bounds.width > 0,
-              force || (autoTranslate && isAutoTranslationPage) else { return }
+        guard !isWorking else { return }
+        guard !webView.isLoading, webView.bounds.width > 0 else {
+            if force { status = "ブラウザーの表示完了後に翻訳してください。" }
+            return
+        }
+        guard force || (autoTranslate && isAutoTranslationPage) else { return }
         isWorking = true
         defer { isWorking = false }
         let currentGeneration = generation
@@ -141,9 +167,10 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
                 return
             }
             if !force && lastFingerprint == fingerprint { return }
-            lastFingerprint = fingerprint
+            diagnostics = "画面: 取得成功 / OCR: 処理前 / AI: \(translator.readinessMessage)"
 
             if let found = cached[fingerprint] {
+                lastFingerprint = fingerprint
                 overlays = found
                 status = "翻訳を再表示しました（メモリ内キャッシュ）"
                 return
@@ -156,15 +183,39 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
                 return
             }
 
-            let segments = try await Self.recognize(cgImage)
+            let visionSegments = try await Self.recognize(cgImage)
             guard currentGeneration == generation else { return }
+
+            // Only the bundled demo uses DOM coordinates. Kindle/external websites
+            // are recognized from displayed pixels only; their DOM is never inspected.
+            let demoSegments = demoMode ? (try? await demoBubbleSegments()) ?? [] : []
+            let segments = demoSegments.isEmpty ? visionSegments : demoSegments
+            diagnostics = "画面: 取得成功 / Vision OCR: \(visionSegments.count)件 / " +
+                (demoMode ? "デモの吹き出し: \(demoSegments.count)件 / " : "") +
+                "AI: \(translator.readinessMessage)"
             guard !segments.isEmpty else {
-                status = "英語の文字を検出できません。対象作品の表示や画面取得の制限を確認してください。"
+                status = "英語を検出できません。画面取得と作品の表示状態を確認してください。"
+                lastFingerprint = fingerprint
                 return
             }
 
-            status = "\(segments.count)か所を端末内AIで翻訳しています…"
-            let translations = try await translator.translate(segments)
+            status = "\(segments.count)か所を翻訳しています…"
+            let translations: [String]
+            if demoMode, !demoSegments.isEmpty {
+                do {
+                    translations = try await translator.translate(segments)
+                    diagnostics += " / 翻訳方式: Apple Intelligence"
+                } catch {
+                    // The fixed translation is ONLY for the original demo fixture.
+                    let samples = segments.compactMap { DemoPage.translation(for: $0.source) }
+                    guard samples.count == segments.count else { throw error }
+                    translations = samples
+                    diagnostics += " / 翻訳方式: デモ固定訳（AI未使用） / AIの問題: \(error.localizedDescription)"
+                }
+            } else {
+                translations = try await translator.translate(segments)
+                diagnostics += " / 翻訳方式: Apple Intelligence"
+            }
             guard currentGeneration == generation, segments.count == translations.count else { return }
 
             // If the reader page changed during inference, discard the outdated overlay.
@@ -181,16 +232,47 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
                                    japanese: pair.1, box: pair.0.box)
             }
             overlays = result
+            lastFingerprint = fingerprint
             cached[fingerprint] = result
             cacheOrder.append(fingerprint)
             if cacheOrder.count > 8 {
                 let oldest = cacheOrder.removeFirst()
                 cached.removeValue(forKey: oldest)
             }
-            status = "\(result.count)か所を翻訳しました。原文ボタンで切り替えられます。"
+            status = "\(result.count)か所を表示しました。原文ボタンで切り替えられます。"
         } catch {
             guard currentGeneration == generation else { return }
-            status = error.localizedDescription
+            diagnostics += " / エラー: \(error.localizedDescription)"
+            status = "翻訳エラー：\(error.localizedDescription)"
+            lastFingerprint = nil
+        }
+    }
+
+    private func demoBubbleSegments() async throws -> [OCRSegment] {
+        let script = """
+        (() => ({ width: innerWidth, height: innerHeight,
+          bubbles: [...document.querySelectorAll('.bubble')].map(el => {
+            const r = el.getBoundingClientRect();
+            return { text: el.textContent.trim(), x: r.left, y: r.top,
+                     width: r.width, height: r.height };
+          })
+        }))()
+        """
+        guard let result = try await webView.evaluateJavaScript(script) as? [String: Any],
+              let width = (result["width"] as? NSNumber)?.doubleValue,
+              let height = (result["height"] as? NSNumber)?.doubleValue,
+              width > 0, height > 0,
+              let bubbles = result["bubbles"] as? [[String: Any]] else { return [] }
+        return bubbles.enumerated().compactMap { index, bubble in
+            guard let text = bubble["text"] as? String,
+                  let x = (bubble["x"] as? NSNumber)?.doubleValue,
+                  let y = (bubble["y"] as? NSNumber)?.doubleValue,
+                  let w = (bubble["width"] as? NSNumber)?.doubleValue,
+                  let h = (bubble["height"] as? NSNumber)?.doubleValue,
+                  w > 0, h > 0 else { return nil }
+            let rect = CGRect(x: x / width, y: 1 - (y + h) / height,
+                              width: w / width, height: h / height)
+            return OCRSegment(index: index, source: text, box: rect)
         }
     }
 
@@ -247,11 +329,13 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
         resetForPageChange()
         status = "ページを読み込んでいます…"
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
         if !demoMode { currentAddress = webView.url?.absoluteString ?? currentAddress }
         status = "表示できました。翻訳を開始できます。"
         if autoTranslate && isAutoTranslationPage { requestTranslation() }
@@ -259,6 +343,31 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
+        guard webView === self.webView else { return }
         status = "表示エラー：\(error.localizedDescription)"
+    }
+
+    // A real child WKWebView is required for target=_blank and window.open.
+    // Returning nil without handling the request silently loses Kindle book tabs.
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard navigationAction.targetFrame == nil else { return nil }
+        let popup = WKWebView(frame: .zero, configuration: configuration)
+        configure(popup)
+        previousTabs.append((view: self.webView, isDemo: demoMode))
+        self.webView = popup
+        demoMode = false
+        tabDepth = previousTabs.count
+        resetForPageChange()
+        currentAddress = navigationAction.request.url?.absoluteString ?? "新しいタブ"
+        status = "新しいタブをアプリ内で開きました。タブ戻るで戻れます。"
+        // WebKit loads the request in the returned WKWebView automatically.
+        return popup
+    }
+
+    func webViewDidClose(_ webView: WKWebView) {
+        if webView === self.webView { closeCurrentTab() }
     }
 }
