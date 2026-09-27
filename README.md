@@ -20,6 +20,31 @@ The default **読書** mode leaves the comic artwork and its original text intac
 
 The **上書き** mode is still an *experimental OCR-box overlay*; it is not true speech-balloon segmentation. It only draws a patch when the translation fits at 10pt or larger. **原文** shows the unmodified Kindle page. These are app display modes, not modifications to Amazon's book or DRM. Current OCR may still mistake cover credits or sound effects for dialogue, and no automatic image inpainting is performed.
 
+
+### Reading-list grouping and manual correction
+
+The OCR grouping algorithm now stitches fragments from a single printed row,
+joins tightly spaced rows inside a text block and avoids merging adjacent
+balloons/boxes across columns. The order is based on the blocks' top edges.
+Short standalone all-caps signage/logo candidates are kept separately instead
+of consuming translation slots by default. The **装飾・看板候補も翻訳する** switch
+in the translation sheet enables them when a real dialogue is misclassified.
+
+The numbered reader markers and **訳文一覧** use the same complete ordered
+block list, including any block that stayed in English because translation
+failed. Each entry shows a provisional "セリフ候補" or "地の文候補" label.
+
+For a page where OCR still splits or joins the wrong rows, open **訳文一覧**.
+Use **↑ / ↓** to adjust reading order, **次と結合** to combine adjacent
+entries, or **2分割** to split an entry along its stored OCR row boundary.
+Merge and split retranslate the affected text. Manual corrections are kept in
+the current page's in-memory cache; they are not stored in the book or uploaded.
+They may need to be repeated after page layout changes or app restart.
+
+This remains a heuristic OCR grouping system, not a reliable detector of
+physical speech-balloon or caption outlines. The "上書き" mode is experimental;
+"読書" is recommended for readable large Japanese translations.
+
 ## Kindle limitations and safety
 
 * Kindle for Web may reject an embedded browser, individual books may be unavailable on the web, or protected content may return blank/unsuitable snapshots. None of these cases is worked around. Try the built-in demo first.
