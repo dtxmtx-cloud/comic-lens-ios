@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Vision-normalized coordinates, origin at the lower left.
