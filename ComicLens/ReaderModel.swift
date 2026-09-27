@@ -29,6 +29,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     @Published var overlays: [TranslationOverlay] = []
     @Published var untranslated: [String] = []
     @Published var translationDetails = ""
+    @Published var translationRevision = 0
     @Published var isWorking = false
     @Published var status = "Kindleを開いています"
     @Published var currentAddress = kindleURL
@@ -43,7 +44,12 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private var timer: Timer?
     private var generation = 0
     private var lastFingerprint: UInt64?
-    private var cached: [UInt64: [TranslationOverlay]] = [:]
+    private struct CachedPage {
+        let overlays: [TranslationOverlay]
+        let untranslated: [String]
+        let details: String
+    }
+    private var cached: [UInt64: CachedPage] = [:]
     private var cacheOrder: [UInt64] = []
     private var textCache: [String: [String?]] = [:]
     private var textCacheOrder: [String] = []
@@ -147,6 +153,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
         overlays = []
         untranslated = []
         translationDetails = ""
+        translationRevision += 1
         lastFingerprint = nil
         diagnostics = "画面: 未取得 / OCR: 未実行 / AI: \(modelReadiness)"
     }
@@ -188,7 +195,10 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
 
             if let found = cached[fingerprint] {
                 lastFingerprint = fingerprint
-                overlays = found
+                overlays = found.overlays
+                untranslated = found.untranslated
+                translationDetails = found.details
+                translationRevision += 1
                 status = "翻訳を再表示しました（メモリ内キャッシュ）"
                 return
             }
@@ -293,8 +303,11 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                 "\($0.id + 1). \($0.japanese)\n原文: \($0.source)"
             }.joined(separator: "\n\n")
             overlays = result
+            translationRevision += 1
             lastFingerprint = latestFingerprint
-            cached[latestFingerprint] = result
+            cached[latestFingerprint] = CachedPage(
+                overlays: result, untranslated: untranslated, details: translationDetails
+            )
             cacheOrder.append(latestFingerprint)
             if cacheOrder.count > 8 {
                 let oldest = cacheOrder.removeFirst()
