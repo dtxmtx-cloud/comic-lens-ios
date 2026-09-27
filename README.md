@@ -14,6 +14,12 @@ This is a proof of concept, **not** a Kindle API client or an official Amazon in
 
 For now, OCR produces text-line boxes, **not exact speech-bubble polygons**. White boxes may cover illustrations and font sizes may need refinement. Reading order is approximate; it does not identify speakers. Page changes are detected by a small fingerprint of the WebView's visible snapshot, not by Kindle-specific page APIs.
 
+### Display modes (readability-first)
+
+The default **読書** mode leaves the comic artwork and its original text intact. A small numbered marker next to each recognized text block opens a fixed-size Japanese **訳文カード**. The card has previous/next controls, shows the source text, and can be closed; **訳文一覧** displays the entire page in larger scrollable text. This mode avoids a page full of tiny white translation rectangles.
+
+The **上書き** mode is still an *experimental OCR-box overlay*; it is not true speech-balloon segmentation. It only draws a patch when the translation fits at 10pt or larger. **原文** shows the unmodified Kindle page. These are app display modes, not modifications to Amazon's book or DRM. Current OCR may still mistake cover credits or sound effects for dialogue, and no automatic image inpainting is performed.
+
 ## Kindle limitations and safety
 
 * Kindle for Web may reject an embedded browser, individual books may be unavailable on the web, or protected content may return blank/unsuitable snapshots. None of these cases is worked around. Try the built-in demo first.
