@@ -133,7 +133,7 @@ struct ReaderView: View {
                     if displayMode == .reader {
                         // Mark OCR dialogue locations without covering the art or
                         // leaving the source text half visible behind Japanese patches.
-                        ForEach(model.overlays) { item in
+                        ForEach(model.entries) { item in
                             let box = TranslationOverlayGeometry.frame(for: item.box,
                                                                         in: geometry.size)
                             Button {
@@ -154,15 +154,15 @@ struct ReaderView: View {
                             .accessibilityLabel("訳文 \(item.id + 1) を表示")
                         }
 
-                        if showReaderCard, let selected = model.overlays.first(where: {
+                        if showReaderCard, let selected = model.entries.first(where: {
                             $0.id == focusedTranslationID
-                        }) ?? model.overlays.first {
+                        }) ?? model.entries.first {
                             VStack {
                                 Spacer(minLength: 0)
                                 TranslationFocusCard(
                                     item: selected,
-                                    index: (model.overlays.firstIndex(where: { $0.id == selected.id }) ?? 0),
-                                    count: model.overlays.count,
+                                    index: (model.entries.firstIndex(where: { $0.id == selected.id }) ?? 0),
+                                    count: model.entries.count,
                                     previous: { focusTranslation(relative: -1) },
                                     next: { focusTranslation(relative: 1) },
                                     close: { showReaderCard = false }
@@ -170,7 +170,7 @@ struct ReaderView: View {
                                 .padding(.horizontal, 8)
                                 .padding(.bottom, 8)
                             }
-                        } else if !showReaderCard && !model.overlays.isEmpty {
+                        } else if !showReaderCard && !model.entries.isEmpty {
                             VStack {
                                 Spacer()
                                 Button("訳文カードを表示") {
@@ -197,11 +197,11 @@ struct ReaderView: View {
             }
             .frame(height: 34)
             .padding(.horizontal, 12)
-            if !model.overlays.isEmpty || !model.untranslated.isEmpty {
+            if !model.entries.isEmpty || !model.decorativeCandidates.isEmpty {
                 Button {
                     showTranslations = true
                 } label: {
-                    Label("訳文一覧（\(model.overlays.count)件）", systemImage: "text.book.closed")
+                    Label("訳文一覧（\(model.entries.count)ブロック）", systemImage: "text.book.closed")
                 }
                 .font(.caption)
                 .buttonStyle(.bordered)
@@ -248,23 +248,59 @@ struct ReaderView: View {
             NavigationStack {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(model.overlays) { item in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("\(item.id + 1). \(item.japanese)")
+                        Text("OCRからまとめた文章ブロックです。分類は推定です。誤った区切りは下の「結合」「分割」で直せます。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("装飾・看板候補も翻訳する", isOn: $model.includeDecorative)
+                            .font(.subheadline)
+                            .disabled(model.isWorking)
+
+                        ForEach(model.entries) { item in
+                            VStack(alignment: .leading, spacing: 7) {
+                                HStack {
+                                    Text("\(item.id + 1).")
+                                        .font(.headline)
+                                    Text(item.kind.rawValue)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("↑") { model.moveEntry(id: item.id, by: -1) }
+                                        .disabled(item.id == 0 || model.isWorking)
+                                        .accessibilityLabel("このブロックを前へ")
+                                    Button("↓") { model.moveEntry(id: item.id, by: 1) }
+                                        .disabled(item.id + 1 >= model.entries.count || model.isWorking)
+                                        .accessibilityLabel("このブロックを次へ")
+                                }
+                                .buttonStyle(.bordered)
+                                Text(item.japanese ?? "翻訳できなかったため、原文を残しています。")
                                     .font(.body)
                                     .textSelection(.enabled)
                                 Text(item.source)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .textSelection(.enabled)
+                                HStack {
+                                    Button("次と結合") {
+                                        model.mergeWithNext(id: item.id)
+                                    }
+                                    .disabled(item.id + 1 >= model.entries.count || model.isWorking)
+                                    Button("2分割") {
+                                        model.splitEntry(id: item.id)
+                                    }
+                                    .disabled(item.lines.count < 2 || model.isWorking)
+                                    Spacer()
+                                }
+                                .font(.caption)
+                                .buttonStyle(.bordered)
                             }
                             Divider()
                         }
-                        if !model.untranslated.isEmpty {
-                            Text("原文を維持した箇所")
+                        if !model.decorativeCandidates.isEmpty && !model.includeDecorative {
+                            Text("装飾・看板候補（原文のまま）")
                                 .font(.headline)
-                            ForEach(model.untranslated.indices, id: \.self) { index in
-                                Text(model.untranslated[index])
+                            ForEach(model.decorativeCandidates.indices, id: \.self) { index in
+                                Text(model.decorativeCandidates[index].source)
                                     .font(.subheadline)
                                     .textSelection(.enabled)
                                 Divider()
@@ -286,7 +322,7 @@ struct ReaderView: View {
             if newMode == .reader { showReaderCard = true }
         }
         .onChange(of: model.translationRevision) { _, _ in
-            focusedTranslationID = model.overlays.first?.id
+            focusedTranslationID = model.entries.first?.id
             showReaderCard = true
         }
         .onAppear { model.startMonitoring() }
@@ -301,10 +337,10 @@ struct ReaderView: View {
     }
 
     private func focusTranslation(relative offset: Int) {
-        guard !model.overlays.isEmpty else { return }
-        let current = model.overlays.firstIndex(where: { $0.id == focusedTranslationID }) ?? 0
-        let next = (current + offset + model.overlays.count) % model.overlays.count
-        focusedTranslationID = model.overlays[next].id
+        guard !model.entries.isEmpty else { return }
+        let current = model.entries.firstIndex(where: { $0.id == focusedTranslationID }) ?? 0
+        let next = (current + offset + model.entries.count) % model.entries.count
+        focusedTranslationID = model.entries[next].id
     }
 }
 
@@ -319,7 +355,7 @@ private enum TranslationDisplayMode: String, CaseIterable, Identifiable {
 /// The fixed-size card is anchored at the bottom of the comic without resizing
 /// WebKit's viewport. Source pixels remain untouched, and the text is readable.
 private struct TranslationFocusCard: View {
-    let item: TranslationOverlay
+    let item: TranslationEntry
     let index: Int
     let count: Int
     let previous: () -> Void
@@ -351,7 +387,7 @@ private struct TranslationFocusCard: View {
             }
             .buttonStyle(.bordered)
             ScrollView(.vertical) {
-                Text(item.japanese)
+                Text(item.japanese ?? item.source)
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
