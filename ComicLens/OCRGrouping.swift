@@ -80,8 +80,10 @@ enum OCRGrouping {
     }
 
     private static func readingOrder(_ a: CGRect, _ b: CGRect) -> Bool {
-        if abs(a.midY - b.midY) > max(0.008, min(a.height, b.height) * 0.45) {
-            return a.midY > b.midY
+        // A merged multiline block has a lower midpoint than a one-line bubble
+        // in the same row. Compare their TOP edges instead so order is stable.
+        if abs(a.maxY - b.maxY) > 0.012 {
+            return a.maxY > b.maxY
         }
         return a.minX < b.minX
     }
