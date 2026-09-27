@@ -27,6 +27,18 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private var previousTabs: [(view: WKWebView, isDemo: Bool)] = []
 
     @Published var overlays: [TranslationOverlay] = []
+    @Published var entries: [TranslationEntry] = []
+    @Published var decorativeCandidates: [OCRSegment] = []
+    @Published var includeDecorative = false {
+        didSet {
+            cached.removeAll()
+            cacheOrder.removeAll()
+            textCache.removeAll()
+            textCacheOrder.removeAll()
+            resetForPageChange()
+            requestTranslation()
+        }
+    }
     @Published var untranslated: [String] = []
     @Published var translationDetails = ""
     @Published var translationRevision = 0
@@ -45,6 +57,8 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private var generation = 0
     private var lastFingerprint: UInt64?
     private struct CachedPage {
+        let entries: [TranslationEntry]
+        let decorative: [OCRSegment]
         let overlays: [TranslationOverlay]
         let untranslated: [String]
         let details: String
@@ -151,6 +165,8 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private func resetForPageChange() {
         generation += 1
         overlays = []
+        entries = []
+        decorativeCandidates = []
         untranslated = []
         translationDetails = ""
         translationRevision += 1
@@ -195,6 +211,8 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
 
             if let found = cached[fingerprint] {
                 lastFingerprint = fingerprint
+                entries = found.entries
+                decorativeCandidates = found.decorative
                 overlays = found.overlays
                 untranslated = found.untranslated
                 translationDetails = found.details
@@ -222,9 +240,11 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             // Only the bundled demo uses DOM coordinates. Kindle/external websites
             // are recognized from displayed pixels only; their DOM is never inspected.
             let demoSegments = demoMode ? (try? await demoBubbleSegments()) ?? [] : []
-            let segments = demoSegments.isEmpty ? vision.segments : demoSegments
+            let detected = demoSegments.isEmpty ? vision.segments : demoSegments
+            decorativeCandidates = detected.filter { $0.kind == .decorative }
+            let segments = selectedSegments(from: detected)
             diagnostics = "画面: 取得成功 / OCR: \(vision.lineCount)行 → " +
-                "\(vision.segments.count)ブロック / " +
+                "\(vision.segments.count)ブロック / 装飾候補: \(decorativeCandidates.count)件 / " +
                 (demoMode ? "デモの吹き出し: \(demoSegments.count)件 / " : "") +
                 "AI: \(modelReadiness)"
             guard !segments.isEmpty else {
@@ -273,7 +293,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                 latestSegments = segments
             } else {
                 guard let latestImage = latest.cgImage else { throw SnapshotIssue.empty }
-                latestSegments = try await Self.recognize(latestImage).segments
+                latestSegments = selectedSegments(from: try await Self.recognize(latestImage).segments)
             }
             guard currentGeneration == generation else { return }
             guard PageIdentity.matches(segments.map(\.source),
@@ -291,23 +311,14 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
 
             // Use the latest visible text rectangles so scrolling/layout changes
             // do not leave the overlay at the original screen coordinates.
-            let result = zip(latestSegments, translations).compactMap { pair -> TranslationOverlay? in
-                guard let japanese = pair.1, !japanese.isEmpty else { return nil }
-                return TranslationOverlay(id: pair.0.index, source: pair.0.source,
-                                          japanese: japanese, box: pair.0.box)
+            entries = zip(latestSegments, translations).map { pair in
+                TranslationEntry(id: pair.0.index, source: pair.0.source,
+                                 japanese: pair.1, box: pair.0.box, kind: pair.0.kind,
+                                 lines: pair.0.lines)
             }
-            untranslated = zip(latestSegments, translations).compactMap { pair in
-                pair.1 == nil ? pair.0.source : nil
-            }
-            translationDetails = result.map {
-                "\($0.id + 1). \($0.japanese)\n原文: \($0.source)"
-            }.joined(separator: "\n\n")
-            overlays = result
-            translationRevision += 1
+            rebuildPresentation()
             lastFingerprint = latestFingerprint
-            cached[latestFingerprint] = CachedPage(
-                overlays: result, untranslated: untranslated, details: translationDetails
-            )
+            saveCurrentPageToCache(fingerprint: latestFingerprint)
             cacheOrder.append(latestFingerprint)
             if cacheOrder.count > 8 {
                 let oldest = cacheOrder.removeFirst()
@@ -321,7 +332,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                     textCache.removeValue(forKey: oldest)
                 }
             }
-            status = "\(result.count)か所を翻訳しました。原文維持: \(untranslated.count)件。長文は訳文一覧で確認できます。"
+            status = "\(overlays.count)/\(entries.count)ブロックを翻訳。原文維持: \(untranslated.count)件。訳文一覧で確認できます。"
         } catch {
             guard currentGeneration == generation else { return }
             diagnostics += " / エラー: \(error.localizedDescription)"
@@ -404,7 +415,8 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             // several slots. Process ALL detected blocks, not just the first 16.
             let groups = OCRGrouping.merge(raw.map { OCRLine(text: $0.0, box: $0.1) })
             let segments = groups.enumerated().map {
-                OCRSegment(index: $0.offset, source: $0.element.text, box: $0.element.box)
+                OCRSegment(index: $0.offset, source: $0.element.text, box: $0.element.box,
+                           kind: $0.element.kind, lines: $0.element.lines)
             }
             return (segments: segments, lineCount: raw.count)
         }.value
