@@ -9,7 +9,7 @@ struct OCRLine {
 
 /// A *candidate* classification, never a claim to have detected the real
 /// speech-balloon contour. Decorative candidates remain available separately.
-enum OCRBlockKind: String {
+enum OCRBlockKind: String, Sendable {
     case speech = "セリフ候補"
     case caption = "地の文候補"
     case decorative = "装飾・看板候補"
