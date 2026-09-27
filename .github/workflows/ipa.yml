@@ -1,0 +1,229 @@
+name: Comic Lens iPhone IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ComicLens/**'
+      - 'project.yml'
+      - '.github/workflows/ipa.yml'
+  pull_request:
+    paths:
+      - 'ComicLens/**'
+      - 'project.yml'
+      - '.github/workflows/ipa.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: comic-lens-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned-device-ipa:
+    name: Build iPhone IPA (unsigned, not installable)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+      - name: Build device app without signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ComicLens.xcodeproj \
+            -scheme ComicLens \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ComicLensDeviceDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$RUNNER_TEMP/comic-lens-device-build.log"
+      - name: Package and verify unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/ComicLensDeviceDerivedData/Build/Products/Release-iphoneos/ComicLens.app"
+          test -f "$APP/Info.plist"
+          test -f "$APP/ComicLens"
+          /usr/bin/lipo -verify_arch arm64 "$APP/ComicLens"
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
+          test "$BUNDLE_ID" = 'cloud.dtxmtx.comiclens'
+          if /usr/bin/codesign --verify "$APP" >/dev/null 2>&1; then
+            echo "::error::Expected an unsigned device app, but this one is signed."
+            exit 1
+          fi
+          STAGE="$RUNNER_TEMP/comic-lens-unsigned-package"
+          mkdir -p "$STAGE/Payload"
+          /usr/bin/ditto "$APP" "$STAGE/Payload/ComicLens.app"
+          (
+            cd "$STAGE"
+            /usr/bin/zip -q -r "$GITHUB_WORKSPACE/ComicLens-unsigned.ipa" Payload
+          )
+          /usr/bin/unzip -tq "$GITHUB_WORKSPACE/ComicLens-unsigned.ipa"
+          /usr/bin/unzip -Z1 "$GITHUB_WORKSPACE/ComicLens-unsigned.ipa" | grep -qx 'Payload/ComicLens.app/Info.plist'
+          echo "Built unsigned arm64 device IPA (NOT installable on iPhone)."
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComicLens-unsigned-iPhone-IPA
+          path: ComicLens-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload device build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComicLens-device-build-log
+          path: ${{ runner.temp }}/comic-lens-device-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  signed-adhoc-ipa:
+    name: Export signed IPA (registered iPhones only)
+    if: ${{ github.event_name != 'pull_request' && vars.IOS_TEAM_ID != '' }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      IOS_TEAM_ID: ${{ vars.IOS_TEAM_ID }}
+      IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+      IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+      IOS_ADHOC_PROFILE_BASE64: ${{ secrets.IOS_ADHOC_PROFILE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate signing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$IOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || { echo "::error::Set a valid IOS_TEAM_ID repository variable."; exit 1; }
+          for name in IOS_DISTRIBUTION_P12_BASE64 IOS_DISTRIBUTION_P12_PASSWORD IOS_ADHOC_PROFILE_BASE64; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Required signing secret $name is missing."
+              exit 1
+            fi
+          done
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+      - name: Import signing certificate and Ad Hoc profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/comic-lens-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)$(uuidgen)"
+          P12="$RUNNER_TEMP/comic-lens-distribution.p12"
+          PROFILE="$RUNNER_TEMP/comic-lens-adhoc.mobileprovision"
+          printf '%s' "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12"
+          printf '%s' "$IOS_ADHOC_PROFILE_BASE64" | base64 --decode > "$PROFILE"
+          chmod 600 "$P12" "$PROFILE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN" | grep -q 'Apple Distribution:'
+          security cms -D -i "$PROFILE" > "$RUNNER_TEMP/adhoc-profile.plist"
+          PROFILE_PLIST="$RUNNER_TEMP/adhoc-profile.plist"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
+          PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
+          PROFILE_APP=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST")
+          test "$PROFILE_TEAM" = "$IOS_TEAM_ID" || { echo "::error::Provisioning profile team does not match IOS_TEAM_ID."; exit 1; }
+          if [ "$PROFILE_APP" != "$IOS_TEAM_ID.cloud.dtxmtx.comiclens" ] && [ "$PROFILE_APP" != "$IOS_TEAM_ID.*" ]; then
+            echo "::error::Provisioning profile does not cover cloud.dtxmtx.comiclens."
+            exit 1
+          fi
+          /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices:0' "$PROFILE_PLIST" >/dev/null || {
+            echo "::error::Provide an Ad Hoc provisioning profile containing registered devices."
+            exit 1
+          }
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          rm -f "$P12" "$PROFILE"
+      - name: Archive signed device app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ComicLens.xcodeproj \
+            -scheme ComicLens \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/ComicLens.xcarchive" \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY='Apple Distribution' \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
+            archive 2>&1 | tee "$RUNNER_TEMP/comic-lens-signed-build.log"
+      - name: Export signed Ad Hoc IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/libexec/PlistBuddy -c 'Clear dict' "$RUNNER_TEMP/ExportOptions.plist" 2>/dev/null || true
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>release-testing</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>$IOS_TEAM_ID</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key><dict>
+              <key>cloud.dtxmtx.comiclens</key><string>$PROFILE_UUID</string>
+            </dict>
+          </dict></plist>
+          EOF
+          plutil -lint "$RUNNER_TEMP/ExportOptions.plist"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/ComicLens.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/comic-lens-signed-export" \
+            2>&1 | tee "$RUNNER_TEMP/comic-lens-export.log"
+          IPA="$RUNNER_TEMP/comic-lens-signed-export/ComicLens.ipa"
+          test -f "$IPA"
+          /usr/bin/unzip -tq "$IPA"
+          /usr/bin/unzip -q "$IPA" 'Payload/ComicLens.app/*' -d "$RUNNER_TEMP/validate-signed"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/validate-signed/Payload/ComicLens.app"
+          test -f "$RUNNER_TEMP/validate-signed/Payload/ComicLens.app/embedded.mobileprovision"
+          cp "$IPA" "$GITHUB_WORKSPACE/ComicLens-signed-AdHoc.ipa"
+      - name: Upload signed IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComicLens-signed-AdHoc-iPhone-IPA
+          path: ComicLens-signed-AdHoc.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload signing logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComicLens-signed-build-logs
+          path: |
+            ${{ runner.temp }}/comic-lens-signed-build.log
+            ${{ runner.temp }}/comic-lens-export.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove signing materials
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${PROFILE_UUID:-}" ]; then
+            rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          fi
+          security delete-keychain "$RUNNER_TEMP/comic-lens-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/comic-lens-distribution.p12" \
+                "$RUNNER_TEMP/comic-lens-adhoc.mobileprovision" \
+                "$RUNNER_TEMP/adhoc-profile.plist"
