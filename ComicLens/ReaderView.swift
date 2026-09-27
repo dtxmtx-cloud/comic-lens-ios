@@ -7,6 +7,9 @@ struct ReaderView: View {
     @State private var address = ReaderModel.kindleURL
     @State private var showDiagnostics = false
     @State private var showTranslations = false
+    @State private var displayMode: TranslationDisplayMode = .reader
+    @State private var focusedTranslationID: Int?
+    @State private var showReaderCard = true
     @State private var languageSetup: TranslationSession.Configuration?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -81,16 +84,25 @@ struct ReaderView: View {
                 }
                 .font(.caption2)
                 .buttonStyle(.bordered)
-                Button {
-                    model.showOriginal.toggle()
-                } label: {
-                    Label(model.showOriginal ? "訳文" : "原文",
-                          systemImage: model.showOriginal ? "text.bubble" : "text.quote")
-                }
-                .buttonStyle(.bordered)
+
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            .padding(.bottom, 5)
+
+            HStack(spacing: 8) {
+                Text("表示")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("翻訳表示方法", selection: $displayMode) {
+                    ForEach(TranslationDisplayMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("翻訳表示方法")
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 7)
 
             Divider()
 
@@ -99,7 +111,7 @@ struct ReaderView: View {
                     EmbeddedBrowser(webView: model.webView)
                         .id(ObjectIdentifier(model.webView))
 
-                    if !model.showOriginal {
+                    if displayMode == .overlay {
                         ForEach(model.overlays) { item in
                             let box = TranslationOverlayGeometry.frame(for: item.box,
                                                                         in: geometry.size)
@@ -114,10 +126,61 @@ struct ReaderView: View {
                                     .position(x: box.midX, y: box.midY)
                                     .accessibilityLabel("翻訳：\(item.japanese)。原文：\(item.source)")
                             }
-                            // Unfittable text is readable in the full translation list
-                            // rather than rendering giant black text over the artwork.
                         }
                         .allowsHitTesting(false)
+                    }
+
+                    if displayMode == .reader {
+                        // Mark OCR dialogue locations without covering the art or
+                        // leaving the source text half visible behind Japanese patches.
+                        ForEach(model.overlays) { item in
+                            let box = TranslationOverlayGeometry.frame(for: item.box,
+                                                                        in: geometry.size)
+                            Button {
+                                focusedTranslationID = item.id
+                                showReaderCard = true
+                            } label: {
+                                Text("\(item.id + 1)")
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                    .frame(minWidth: 23, minHeight: 23)
+                                    .background(.indigo, in: Circle())
+                                    .overlay(Circle().strokeBorder(.white, lineWidth: 1.4))
+                                    .shadow(radius: 2)
+                            }
+                            .buttonStyle(.plain)
+                            .position(x: max(13, min(geometry.size.width - 13, box.minX + 5)),
+                                      y: max(13, min(geometry.size.height - 13, box.minY + 5)))
+                            .accessibilityLabel("訳文 \(item.id + 1) を表示")
+                        }
+
+                        if showReaderCard, let selected = model.overlays.first(where: {
+                            $0.id == focusedTranslationID
+                        }) ?? model.overlays.first {
+                            VStack {
+                                Spacer(minLength: 0)
+                                TranslationFocusCard(
+                                    item: selected,
+                                    index: (model.overlays.firstIndex(where: { $0.id == selected.id }) ?? 0),
+                                    count: model.overlays.count,
+                                    previous: { focusTranslation(relative: -1) },
+                                    next: { focusTranslation(relative: 1) },
+                                    close: { showReaderCard = false }
+                                )
+                                .padding(.horizontal, 8)
+                                .padding(.bottom, 8)
+                            }
+                        } else if !showReaderCard && !model.overlays.isEmpty {
+                            VStack {
+                                Spacer()
+                                Button("訳文カードを表示") {
+                                    showReaderCard = true
+                                }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.borderedProminent)
+                                .padding(.bottom, 10)
+                            }
+                        }
                     }
                 }
                 .clipped()
@@ -219,6 +282,13 @@ struct ReaderView: View {
                 }
             }
         }
+        .onChange(of: displayMode) { _, newMode in
+            if newMode == .reader { showReaderCard = true }
+        }
+        .onChange(of: model.translationRevision) { _, _ in
+            focusedTranslationID = model.overlays.first?.id
+            showReaderCard = true
+        }
         .onAppear { model.startMonitoring() }
         .onDisappear { model.stopMonitoring() }
         .onChange(of: scenePhase) { _, newPhase in
@@ -228,6 +298,78 @@ struct ReaderView: View {
         .onChange(of: model.currentAddress) { _, newValue in
             address = newValue
         }
+    }
+
+    private func focusTranslation(relative offset: Int) {
+        guard !model.overlays.isEmpty else { return }
+        let current = model.overlays.firstIndex(where: { $0.id == focusedTranslationID }) ?? 0
+        let next = (current + offset + model.overlays.count) % model.overlays.count
+        focusedTranslationID = model.overlays[next].id
+    }
+}
+
+private enum TranslationDisplayMode: String, CaseIterable, Identifiable {
+    case reader = "読書"
+    case overlay = "上書き"
+    case original = "原文"
+
+    var id: String { rawValue }
+}
+
+/// The fixed-size card is anchored at the bottom of the comic without resizing
+/// WebKit's viewport. Source pixels remain untouched, and the text is readable.
+private struct TranslationFocusCard: View {
+    let item: TranslationOverlay
+    let index: Int
+    let count: Int
+    let previous: () -> Void
+    let next: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("訳文 \(index + 1) / \(count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.indigo)
+                Spacer()
+                Button(action: previous) {
+                    Image(systemName: "chevron.left")
+                        .frame(width: 32, height: 27)
+                }
+                .accessibilityLabel("前の訳文")
+                Button(action: next) {
+                    Image(systemName: "chevron.right")
+                        .frame(width: 32, height: 27)
+                }
+                .accessibilityLabel("次の訳文")
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .frame(width: 26, height: 27)
+                }
+                .accessibilityLabel("訳文カードを閉じる")
+            }
+            .buttonStyle(.bordered)
+            ScrollView(.vertical) {
+                Text(item.japanese)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                Text(item.source)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 5)
+                    .textSelection(.enabled)
+            }
+            .frame(maxHeight: 113)
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(.indigo.opacity(0.22), lineWidth: 1))
+        .shadow(radius: 6)
     }
 }
 
