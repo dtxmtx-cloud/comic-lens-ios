@@ -194,7 +194,13 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                 return
             }
 
-            let visionSegments = try await Self.recognize(cgImage)
+            let visionSegments: [OCRSegment]
+            if demoMode {
+                // The fixture remains testable even if Vision reports an OCR error.
+                visionSegments = (try? await Self.recognize(cgImage)) ?? []
+            } else {
+                visionSegments = try await Self.recognize(cgImage)
+            }
             guard currentGeneration == generation else { return }
 
             // Only the bundled demo uses DOM coordinates. Kindle/external websites
