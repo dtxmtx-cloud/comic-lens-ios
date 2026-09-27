@@ -4,6 +4,7 @@ import WebKit
 struct ReaderView: View {
     @StateObject private var model = ReaderModel()
     @State private var address = ReaderModel.kindleURL
+    @State private var showDiagnostics = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -14,6 +15,16 @@ struct ReaderView: View {
                 Text("COMIC LENS")
                     .font(.system(size: 17, weight: .black, design: .rounded))
                 Spacer()
+                if model.tabDepth > 0 {
+                    Button {
+                        model.closeCurrentTab()
+                    } label: {
+                        Label("タブ戻る", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("元のタブに戻る")
+                }
                 Button("Kindle") { model.openHome() }
                     .buttonStyle(.bordered)
                 Button("デモ") { model.openDemo() }
@@ -74,6 +85,7 @@ struct ReaderView: View {
             GeometryReader { geometry in
                 ZStack(alignment: .topLeading) {
                     EmbeddedBrowser(webView: model.webView)
+                        .id(ObjectIdentifier(model.webView))
 
                     if !model.showOriginal {
                         ForEach(model.overlays) { item in
@@ -112,6 +124,29 @@ struct ReaderView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
+            Button {
+                showDiagnostics.toggle()
+            } label: {
+                HStack {
+                    Text(showDiagnostics ? "診断を閉じる" : "翻訳診断を表示")
+                    Image(systemName: showDiagnostics ? "chevron.up" : "chevron.down")
+                    Spacer()
+                }
+            }
+            .font(.caption2)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+            if showDiagnostics {
+                Text(model.diagnostics)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
         }
         .background(Color(uiColor: .systemBackground))
         .onAppear { model.startMonitoring() }
