@@ -76,27 +76,35 @@ final class OnDeviceTranslator {
         [[0]] 日本語
         [[1]] 日本語
         """
-        let session = LanguageModelSession(instructions: instructions)
-        let lines = segments.map {
-            "[[\($0.index)]] \($0.source.replacingOccurrences(of: "\n", with: " "))"
-        }.joined(separator: "\n")
-        let response = try await session.respond(to: "Translate each numbered line.\n\(lines)")
-        if let parsed = TranslationLineParser.parse(response.content, expected: segments.count) {
-            return parsed
-        }
 
-        // If a batch response omits an identifier, fall back to one line at a time.
-        // Separate sessions avoid accidentally carrying the preceding response into the next one.
+        // Process all dialogue groups without sending a long, easy-to-truncate
+        // full-page response through the small on-device model at once.
         var result: [String] = []
-        for segment in segments {
+        for start in stride(from: 0, to: segments.count, by: 5) {
             try Task.checkCancellation()
-            let single = LanguageModelSession(instructions:
-                "The person's locale is ja_JP. Translate this English comic dialogue to natural Japanese. " +
-                "Return ONLY the Japanese translation. Do not add explanations.")
-            let response = try await single.respond(to: segment.source)
-            let translation = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !translation.isEmpty else { throw TranslationIssue.malformedResponse }
-            result.append(translation)
+            let chunk = Array(segments[start..<min(start + 5, segments.count)])
+            let lines = chunk.enumerated().map { offset, segment in
+                "[[\(offset)]] \(segment.source.replacingOccurrences(of: "\n", with: " "))"
+            }.joined(separator: "\n")
+            let session = LanguageModelSession(instructions: instructions)
+            let response = try await session.respond(to: "Translate each numbered line.\n\(lines)")
+            if let parsed = TranslationLineParser.parse(response.content, expected: chunk.count) {
+                result.append(contentsOf: parsed)
+                continue
+            }
+
+            // Fall back only for this chunk. Never silently drop a dialogue group
+            // when the model returns a malformed numbered response.
+            for segment in chunk {
+                try Task.checkCancellation()
+                let single = LanguageModelSession(instructions:
+                    "The person's locale is ja_JP. Translate this English comic dialogue to natural Japanese. " +
+                    "Return ONLY the Japanese translation. Do not add explanations.")
+                let answer = try await single.respond(to: segment.source)
+                let translation = answer.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !translation.isEmpty else { throw TranslationIssue.malformedResponse }
+                result.append(translation)
+            }
         }
         return result
     }
