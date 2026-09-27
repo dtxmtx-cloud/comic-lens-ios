@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import FoundationModels
+import Translation
 
 struct OCRSegment: Sendable {
     let index: Int
@@ -51,6 +52,15 @@ enum TranslationLineParser {
         guard result.count == expected else { return nil }
         return (0..<expected).compactMap { result[$0] }
     }
+}
+
+struct PageTranslationResult {
+    /// Nil preserves the visible original when both local engines cannot translate.
+    let texts: [String?]
+    let aiCount: Int
+    let systemCount: Int
+    let originalCount: Int
+    let languagePackNeeded: Bool
 }
 
 @MainActor
@@ -107,5 +117,77 @@ final class OnDeviceTranslator {
             }
         }
         return result
+    }
+
+    /// Best-effort transformation of individual, user-visible dialogue blocks.
+    /// Apple Intelligence errors must never discard translations from other blocks.
+    /// The dedicated system Translation framework is a separate translation engine,
+    /// not a modification to Foundation Models guardrail settings.
+    func translatePage(_ segments: [OCRSegment]) async -> PageTranslationResult {
+        guard !segments.isEmpty else {
+            return PageTranslationResult(texts: [], aiCount: 0, systemCount: 0,
+                                         originalCount: 0, languagePackNeeded: false)
+        }
+
+        let en = Locale.Language(identifier: "en")
+        let ja = Locale.Language(identifier: "ja")
+        let languageStatus = await LanguageAvailability(preferredStrategy: .lowLatency)
+            .status(from: en, to: ja)
+        let systemSession: TranslationSession?
+        switch languageStatus {
+        case .installed:
+            systemSession = TranslationSession(installedSource: en, target: ja,
+                                               preferredStrategy: .lowLatency)
+        case .supported, .unsupported:
+            systemSession = nil
+        @unknown default:
+            systemSession = nil
+        }
+
+        var results = [String?](repeating: nil, count: segments.count)
+        var aiCount = 0
+        var systemCount = 0
+
+        // Sending a whole comic page into a single generative prompt previously
+        // caused one rejected segment to blank the entire page.
+        for (position, segment) in segments.enumerated() {
+            if Task.isCancelled { break }
+            if case .available = SystemLanguageModel.default.availability {
+                do {
+                    let session = LanguageModelSession(instructions: """
+                        The user's locale is ja_JP. Translate the provided English
+                        comic dialogue into natural Japanese. Preserve its original
+                        meaning and names. Do not invent text or add explanations.
+                        Return only the Japanese translation.
+                        """)
+                    let response = try await session.respond(to: segment.source)
+                    let value = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !value.isEmpty {
+                        results[position] = value
+                        aiCount += 1
+                        continue
+                    }
+                } catch {
+                    // Report partial completion and preserve the original if the
+                    // next, dedicated translation engine is unavailable too.
+                }
+            }
+            if let systemSession {
+                do {
+                    let response = try await systemSession.translate(segment.source)
+                    let value = response.targetText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !value.isEmpty {
+                        results[position] = value
+                        systemCount += 1
+                    }
+                } catch {
+                    // Keep the visible original. Never invent a translated sentence.
+                }
+            }
+        }
+        let originalCount = results.filter { $0 == nil }.count
+        return PageTranslationResult(texts: results, aiCount: aiCount,
+                                     systemCount: systemCount, originalCount: originalCount,
+                                     languagePackNeeded: languageStatus == .supported)
     }
 }
