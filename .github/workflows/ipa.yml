@@ -56,7 +56,7 @@ jobs:
           APP="$RUNNER_TEMP/ComicLensDeviceDerivedData/Build/Products/Release-iphoneos/ComicLens.app"
           test -f "$APP/Info.plist"
           test -f "$APP/ComicLens"
-          /usr/bin/lipo -verify_arch arm64 "$APP/ComicLens"
+          /usr/bin/lipo "$APP/ComicLens" -verify_arch arm64
           BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
           test "$BUNDLE_ID" = 'cloud.dtxmtx.comiclens'
           if /usr/bin/codesign --verify "$APP" >/dev/null 2>&1; then
@@ -171,7 +171,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          /usr/libexec/PlistBuddy -c 'Clear dict' "$RUNNER_TEMP/ExportOptions.plist" 2>/dev/null || true
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
