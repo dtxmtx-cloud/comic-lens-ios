@@ -91,19 +91,12 @@ struct ReaderView: View {
                         ForEach(model.overlays) { item in
                             let box = TranslationOverlayGeometry.frame(for: item.box,
                                                                         in: geometry.size)
-                            Text(item.japanese)
-                                .font(.system(size: min(18, max(11, box.height / 2.5)),
-                                              weight: .semibold))
-                                .foregroundStyle(.black)
-                                .multilineTextAlignment(.center)
-                                .minimumScaleFactor(0.65)
-                                .lineLimit(4)
-                                .padding(4)
+                            FittedTranslationLabel(text: item.japanese, availableSize: box.size)
                                 .frame(width: box.width, height: box.height)
                                 .background(.white.opacity(0.96),
-                                            in: RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10)
-                                    .strokeBorder(.black.opacity(0.30), lineWidth: 1))
+                                            in: RoundedRectangle(cornerRadius: min(9, box.height / 4)))
+                                .overlay(RoundedRectangle(cornerRadius: min(9, box.height / 4))
+                                    .strokeBorder(.black.opacity(0.25), lineWidth: 0.5))
                                 .position(x: box.midX, y: box.midY)
                                 .accessibilityLabel("翻訳：\(item.japanese)。原文：\(item.source)")
                         }
@@ -165,14 +158,60 @@ struct ReaderView: View {
 }
 
 enum TranslationOverlayGeometry {
-    /// Convert Vision's bottom-left normalized image coordinates to the view's top-left points.
+    /// Convert Vision's bottom-left normalized bounding box into the visible WebView.
+    /// Avoid the former 105pt minimum width / 42pt height that caused dozens of
+    /// tiny word translations to cover one another.
     static func frame(for normalized: CGRect, in size: CGSize) -> CGRect {
-        guard size.width > 0 && size.height > 0 else { return .zero }
-        let left = max(0, min(size.width - 1, normalized.minX * size.width - 5))
-        let top = max(0, min(size.height - 1, (1 - normalized.maxY) * size.height - 5))
-        let width = min(size.width - left, max(105, normalized.width * size.width + 18))
-        let height = min(size.height - top, max(42, normalized.height * size.height + 16))
-        return CGRect(x: left, y: top, width: max(1, width), height: max(1, height))
+        guard size.width > 4 && size.height > 4 else { return .zero }
+        let centerX = normalized.midX * size.width
+        let centerY = (1 - normalized.midY) * size.height
+        let width = min(size.width - 4, max(38, normalized.width * size.width + 12))
+        let height = min(size.height - 4, max(20, normalized.height * size.height + 10))
+        let x = max(2, min(size.width - width - 2, centerX - width / 2))
+        let y = max(2, min(size.height - height - 2, centerY - height / 2))
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+
+/// SwiftUI's minimumScaleFactor does not reliably shrink multi-line Text.
+/// Fit the entire translation using the *actual* UIKit multi-line label size.
+private struct FittedTranslationLabel: UIViewRepresentable {
+    let text: String
+    let availableSize: CGSize
+
+    func makeUIView(context: Context) -> UILabel {
+        let label = UILabel()
+        label.numberOfLines = 0
+        label.lineBreakMode = .byCharWrapping
+        label.textAlignment = .center
+        label.textColor = .black
+        label.backgroundColor = .clear
+        label.adjustsFontSizeToFitWidth = false
+        label.isAccessibilityElement = false
+        return label
+    }
+
+    func updateUIView(_ label: UILabel, context: Context) {
+        label.text = text
+        let width = max(2, availableSize.width - 6)
+        let height = max(2, availableSize.height - 6)
+        // Start legibly, then shrink until ALL lines fit both dimensions.
+        // Small, zoomed-out bubbles can use a smaller minimum than demo bubbles.
+        let maximum: CGFloat = 15
+        let minimum: CGFloat = 3.5
+        var chosen = minimum
+        var candidate = maximum
+        while candidate >= minimum {
+            label.font = UIFont.systemFont(ofSize: candidate, weight: .semibold)
+            let required = label.sizeThatFits(CGSize(width: width, height: 10_000))
+            if required.height <= height && required.width <= width + 0.5 {
+                chosen = candidate
+                break
+            }
+            candidate -= 0.5
+        }
+        label.font = UIFont.systemFont(ofSize: chosen, weight: .semibold)
+        label.setNeedsLayout()
     }
 }
 
