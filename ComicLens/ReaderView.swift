@@ -1,10 +1,13 @@
 import SwiftUI
+import Translation
 import WebKit
 
 struct ReaderView: View {
     @StateObject private var model = ReaderModel()
     @State private var address = ReaderModel.kindleURL
     @State private var showDiagnostics = false
+    @State private var showTranslations = false
+    @State private var languageSetup: TranslationSession.Configuration?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -69,6 +72,15 @@ struct ReaderView: View {
                 }
                 .disabled(model.isWorking)
                 .buttonStyle(.borderedProminent)
+                Button("言語準備") {
+                    languageSetup = TranslationSession.Configuration(
+                        source: Locale.Language(identifier: "en"),
+                        target: Locale.Language(identifier: "ja"),
+                        preferredStrategy: .lowLatency)
+                    languageSetup?.invalidate()
+                }
+                .font(.caption2)
+                .buttonStyle(.bordered)
                 Button {
                     model.showOriginal.toggle()
                 } label: {
@@ -91,14 +103,19 @@ struct ReaderView: View {
                         ForEach(model.overlays) { item in
                             let box = TranslationOverlayGeometry.frame(for: item.box,
                                                                         in: geometry.size)
-                            FittedTranslationLabel(text: item.japanese, availableSize: box.size)
-                                .frame(width: box.width, height: box.height)
-                                .background(.white.opacity(0.96),
-                                            in: RoundedRectangle(cornerRadius: min(9, box.height / 4)))
-                                .overlay(RoundedRectangle(cornerRadius: min(9, box.height / 4))
-                                    .strokeBorder(.black.opacity(0.25), lineWidth: 0.5))
-                                .position(x: box.midX, y: box.midY)
-                                .accessibilityLabel("翻訳：\(item.japanese)。原文：\(item.source)")
+                            if let fontSize = TranslationTextLayout.fittedFont(
+                                text: item.japanese, size: box.size) {
+                                FittedTranslationLabel(text: item.japanese, fontSize: fontSize)
+                                    .frame(width: box.width, height: box.height)
+                                    .background(.white.opacity(0.97),
+                                                in: RoundedRectangle(cornerRadius: min(7, box.height / 5)))
+                                    .overlay(RoundedRectangle(cornerRadius: min(7, box.height / 5))
+                                        .strokeBorder(.black.opacity(0.20), lineWidth: 0.5))
+                                    .position(x: box.midX, y: box.midY)
+                                    .accessibilityLabel("翻訳：\(item.japanese)。原文：\(item.source)")
+                            }
+                            // Unfittable text is readable in the full translation list
+                            // rather than rendering giant black text over the artwork.
                         }
                         .allowsHitTesting(false)
                     }
@@ -117,6 +134,17 @@ struct ReaderView: View {
             }
             .frame(height: 34)
             .padding(.horizontal, 12)
+            if !model.overlays.isEmpty || !model.untranslated.isEmpty {
+                Button {
+                    showTranslations = true
+                } label: {
+                    Label("訳文一覧（\(model.overlays.count)件）", systemImage: "text.book.closed")
+                }
+                .font(.caption)
+                .buttonStyle(.bordered)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 5)
+            }
             Button {
                 showDiagnostics.toggle()
             } label: {
@@ -145,6 +173,52 @@ struct ReaderView: View {
             }
         }
         .background(Color(uiColor: .systemBackground))
+        .translationTask(languageSetup) { session in
+            do {
+                try await session.prepareTranslation()
+                model.status = "英語・日本語の翻訳言語を準備しました。再度「翻訳」を押してください。"
+            } catch {
+                model.status = "言語準備: \(error.localizedDescription)"
+            }
+        }
+        .sheet(isPresented: $showTranslations) {
+            NavigationStack {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(model.overlays) { item in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("\(item.id + 1). \(item.japanese)")
+                                    .font(.body)
+                                    .textSelection(.enabled)
+                                Text(item.source)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                            Divider()
+                        }
+                        if !model.untranslated.isEmpty {
+                            Text("原文を維持した箇所")
+                                .font(.headline)
+                            ForEach(model.untranslated.indices, id: \.self) { index in
+                                Text(model.untranslated[index])
+                                    .font(.subheadline)
+                                    .textSelection(.enabled)
+                                Divider()
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                }
+                .navigationTitle("訳文一覧")
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("閉じる") { showTranslations = false }
+                    }
+                }
+            }
+        }
         .onAppear { model.startMonitoring() }
         .onDisappear { model.stopMonitoring() }
         .onChange(of: scenePhase) { _, newPhase in
@@ -173,45 +247,69 @@ enum TranslationOverlayGeometry {
     }
 }
 
-/// SwiftUI's minimumScaleFactor does not reliably shrink multi-line Text.
-/// Fit the entire translation using the *actual* UIKit multi-line label size.
+/// Determine whether the entire Japanese string can fit before drawing a
+/// white patch. This prevents credits/long OCR text from escaping its rectangle.
+private enum TranslationTextLayout {
+    static func fittedFont(text: String, size: CGSize) -> CGFloat? {
+        let width = size.width - 8
+        let height = size.height - 6
+        guard width > 10 && height > 8 else { return nil }
+        let probe = UILabel()
+        probe.numberOfLines = 0
+        probe.lineBreakMode = .byCharWrapping
+        probe.text = text
+        var fontSize: CGFloat = 15
+        while fontSize >= 5 {
+            probe.font = UIFont.systemFont(ofSize: fontSize, weight: .medium)
+            let required = probe.sizeThatFits(CGSize(width: width, height: 100_000))
+            if required.height <= height && required.width <= width + 0.5 {
+                return fontSize
+            }
+            fontSize -= 0.5
+        }
+        return nil
+    }
+}
+
+/// A clipped UIKit container: UILabel itself has an intrinsic content size that
+/// can otherwise extend outside the parent SwiftUI .frame(width:height:).
 private struct FittedTranslationLabel: UIViewRepresentable {
     let text: String
-    let availableSize: CGSize
+    let fontSize: CGFloat
 
-    func makeUIView(context: Context) -> UILabel {
-        let label = UILabel()
+    func makeUIView(context: Context) -> TranslationTextContainer {
+        TranslationTextContainer()
+    }
+
+    func updateUIView(_ container: TranslationTextContainer, context: Context) {
+        container.label.text = text
+        container.label.font = UIFont.systemFont(ofSize: fontSize, weight: .medium)
+    }
+}
+
+private final class TranslationTextContainer: UIView {
+    let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
         label.numberOfLines = 0
         label.lineBreakMode = .byCharWrapping
         label.textAlignment = .center
         label.textColor = .black
         label.backgroundColor = .clear
-        label.adjustsFontSizeToFitWidth = false
         label.isAccessibilityElement = false
-        return label
+        label.clipsToBounds = true
+        addSubview(label)
     }
 
-    func updateUIView(_ label: UILabel, context: Context) {
-        label.text = text
-        let width = max(2, availableSize.width - 6)
-        let height = max(2, availableSize.height - 6)
-        // Start legibly, then shrink until ALL lines fit both dimensions.
-        // Small, zoomed-out bubbles can use a smaller minimum than demo bubbles.
-        let maximum: CGFloat = 15
-        let minimum: CGFloat = 3.5
-        var chosen = minimum
-        var candidate = maximum
-        while candidate >= minimum {
-            label.font = UIFont.systemFont(ofSize: candidate, weight: .semibold)
-            let required = label.sizeThatFits(CGSize(width: width, height: 10_000))
-            if required.height <= height && required.width <= width + 0.5 {
-                chosen = candidate
-                break
-            }
-            candidate -= 0.5
-        }
-        label.font = UIFont.systemFont(ofSize: chosen, weight: .semibold)
-        label.setNeedsLayout()
+    required init?(coder: NSCoder) {
+        fatalError("Use init(frame:)")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        label.frame = bounds.insetBy(dx: 4, dy: 3)
     }
 }
 
