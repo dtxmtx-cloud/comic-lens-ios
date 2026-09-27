@@ -401,7 +401,9 @@ private enum TranslationTextLayout {
         probe.lineBreakMode = .byCharWrapping
         probe.text = text
         var fontSize: CGFloat = 15
-        while fontSize >= 5 {
+        // Smaller than 10 pt is not a usable comic-reading experience;
+        // keep the original page and show the translation in the reader card.
+        while fontSize >= 10 {
             probe.font = UIFont.systemFont(ofSize: fontSize, weight: .medium)
             let required = probe.sizeThatFits(CGSize(width: width, height: 100_000))
             if required.height <= height && required.width <= width + 0.5 {
