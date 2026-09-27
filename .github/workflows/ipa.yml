@@ -25,6 +25,8 @@ jobs:
   unsigned-device-ipa:
     name: Build iPhone IPA (unsigned, not installable)
     runs-on: macos-26
+    permissions:
+      contents: write
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -79,13 +81,25 @@ jobs:
           /usr/bin/unzip -tq "$GITHUB_WORKSPACE/ComicLens-unsigned.ipa"
           /usr/bin/unzip -Z1 "$GITHUB_WORKSPACE/ComicLens-unsigned.ipa" | grep -qx 'Payload/ComicLens.app/Info.plist'
           echo "Built unsigned arm64 device IPA (NOT installable on iPhone)."
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: ComicLens-unsigned-iPhone-IPA
-          path: ComicLens-unsigned.ipa
-          if-no-files-found: error
-          retention-days: 14
+      - name: Publish raw IPA as GitHub Release asset
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="ci-${GITHUB_RUN_NUMBER}"
+          test -f "$GITHUB_WORKSPACE/ComicLens-unsigned.ipa"
+          gh release create "$TAG" "$GITHUB_WORKSPACE/ComicLens-unsigned.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Comic Lens CI #${GITHUB_RUN_NUMBER} (unsigned)" \
+            --prerelease \
+            --notes "Unmodified .ipa file for arm64 iPhone builds. UNSIGNED: this file cannot be installed on a normal iPhone. The signed Ad Hoc IPA, if configured, is added to the same release."
+          LINK="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ComicLens-unsigned.ipa"
+          echo "### Direct unsigned IPA (not installable)" >> "$GITHUB_STEP_SUMMARY"
+          echo "[ComicLens-unsigned.ipa]($LINK)" >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fx 'ComicLens-unsigned.ipa'
       - name: Upload device build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -97,8 +111,11 @@ jobs:
 
   signed-adhoc-ipa:
     name: Export signed IPA (registered iPhones only)
+    needs: unsigned-device-ipa
     if: ${{ github.event_name != 'pull_request' && vars.IOS_TEAM_ID != '' }}
     runs-on: macos-26
+    permissions:
+      contents: write
     timeout-minutes: 45
     env:
       IOS_TEAM_ID: ${{ vars.IOS_TEAM_ID }}
@@ -210,13 +227,20 @@ jobs:
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/validate-signed/Payload/ComicLens.app"
           test -f "$RUNNER_TEMP/validate-signed/Payload/ComicLens.app/embedded.mobileprovision"
           cp "$IPA" "$GITHUB_WORKSPACE/ComicLens-signed-AdHoc.ipa"
-      - name: Upload signed IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: ComicLens-signed-AdHoc-iPhone-IPA
-          path: ComicLens-signed-AdHoc.ipa
-          if-no-files-found: error
-          retention-days: 14
+      - name: Publish raw signed IPA as GitHub Release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="ci-${GITHUB_RUN_NUMBER}"
+          test -f "$GITHUB_WORKSPACE/ComicLens-signed-AdHoc.ipa"
+          gh release upload "$TAG" "$GITHUB_WORKSPACE/ComicLens-signed-AdHoc.ipa" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          LINK="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ComicLens-signed-AdHoc.ipa"
+          echo "### Direct signed Ad Hoc IPA (registered devices only)" >> "$GITHUB_STEP_SUMMARY"
+          echo "[ComicLens-signed-AdHoc.ipa]($LINK)" >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fx 'ComicLens-signed-AdHoc.ipa'
       - name: Upload signing logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
