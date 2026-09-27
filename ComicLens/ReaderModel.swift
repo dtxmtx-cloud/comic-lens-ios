@@ -43,6 +43,8 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private var lastFingerprint: UInt64?
     private var cached: [UInt64: [TranslationOverlay]] = [:]
     private var cacheOrder: [UInt64] = []
+    private var textCache: [String: [String]] = [:]
+    private var textCacheOrder: [String] = []
     private var demoMode = false
 
     override init() {
@@ -217,8 +219,14 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             }
 
             status = "\(segments.count)か所を翻訳しています…"
+            let scope = demoMode ? "bundled-demo" : (webView.url?.absoluteString ?? "")
+            let textKey = PageIdentity.cacheKey(scope: scope, lines: segments.map(\.source))
             let translations: [String]
-            if demoMode, !demoSegments.isEmpty {
+            if segments.count >= 2, let saved = textCache[textKey],
+               saved.count == segments.count {
+                translations = saved
+                diagnostics += " / 翻訳方式: 本文キャッシュ"
+            } else if demoMode, !demoSegments.isEmpty {
                 do {
                     translations = try await translator.translate(segments)
                     diagnostics += " / 翻訳方式: Apple Intelligence"
@@ -235,26 +243,56 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             }
             guard currentGeneration == generation, segments.count == translations.count else { return }
 
-            // If the reader page changed during inference, discard the outdated overlay.
+            // Screenshot pixels can change from lazy rendering, a blinking cursor, etc.
+            // Revalidate *visible dialogue* after inference, not the entire pixel hash.
             let latest = try await snapshot()
-            guard Self.fingerprint(latest) == fingerprint else {
+            guard currentGeneration == generation,
+                  let latestFingerprint = Self.fingerprint(latest) else { return }
+            let latestSegments: [OCRSegment]
+            if demoMode, !demoSegments.isEmpty {
+                latestSegments = try await demoBubbleSegments()
+            } else if latestFingerprint == fingerprint {
+                // Unchanged image means the recognized text/positions are unchanged.
+                latestSegments = segments
+            } else {
+                guard let latestImage = latest.cgImage else { throw SnapshotIssue.empty }
+                latestSegments = try await Self.recognize(latestImage)
+            }
+            guard currentGeneration == generation else { return }
+            guard PageIdentity.matches(segments.map(\.source),
+                                       latestSegments.map(\.source)) else {
                 overlays = []
                 lastFingerprint = nil
-                status = "ページ変更を検出しました。次のページを翻訳します。"
+                diagnostics += " / 再検証: 本文変更（翻訳を破棄）"
+                status = "本文の変更を検出しました。現在のページを再翻訳してください。"
                 return
             }
+            diagnostics += " / 再検証: 英文一致"
+            if latestFingerprint != fingerprint {
+                diagnostics += "（画像差分は許容）"
+            }
 
-            let result = zip(segments, translations).map { pair in
+            // Use the latest visible text rectangles so scrolling/layout changes
+            // do not leave the overlay at the original screen coordinates.
+            let result = zip(latestSegments, translations).map { pair in
                 TranslationOverlay(id: pair.0.index, source: pair.0.source,
                                    japanese: pair.1, box: pair.0.box)
             }
             overlays = result
-            lastFingerprint = fingerprint
-            cached[fingerprint] = result
-            cacheOrder.append(fingerprint)
+            lastFingerprint = latestFingerprint
+            cached[latestFingerprint] = result
+            cacheOrder.append(latestFingerprint)
             if cacheOrder.count > 8 {
                 let oldest = cacheOrder.removeFirst()
                 cached.removeValue(forKey: oldest)
+            }
+            if segments.count >= 2, textCache[textKey] == nil {
+                textCache[textKey] = translations
+                textCacheOrder.append(textKey)
+                if textCacheOrder.count > 8 {
+                    let oldest = textCacheOrder.removeFirst()
+                    textCache.removeValue(forKey: oldest)
+                }
             }
             status = "\(result.count)か所を表示しました。原文ボタンで切り替えられます。"
         } catch {
