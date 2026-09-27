@@ -319,11 +319,6 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             rebuildPresentation()
             lastFingerprint = latestFingerprint
             saveCurrentPageToCache(fingerprint: latestFingerprint)
-            cacheOrder.append(latestFingerprint)
-            if cacheOrder.count > 8 {
-                let oldest = cacheOrder.removeFirst()
-                cached.removeValue(forKey: oldest)
-            }
             if segments.count >= 2, textCache[textKey] == nil {
                 textCache[textKey] = translations
                 textCacheOrder.append(textKey)
@@ -338,6 +333,109 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             diagnostics += " / エラー: \(error.localizedDescription)"
             status = "翻訳エラー：\(error.localizedDescription)"
             lastFingerprint = nil
+        }
+    }
+
+    private func selectedSegments(from all: [OCRSegment]) -> [OCRSegment] {
+        all.filter { includeDecorative || $0.kind != .decorative }
+            .enumerated().map { index, value in
+                OCRSegment(index: index, source: value.source, box: value.box,
+                           kind: value.kind, lines: value.lines)
+            }
+    }
+
+    /// One ordered array is the single source of truth for marker IDs, card
+    /// navigation and the full translation sheet. A failed translation retains
+    /// a numbered entry with its English source instead of shifting later IDs.
+    private func rebuildPresentation() {
+        entries = entries.enumerated().map { index, value in
+            TranslationEntry(id: index, source: value.source,
+                             japanese: value.japanese, box: value.box,
+                             kind: value.kind, lines: value.lines)
+        }
+        overlays = entries.compactMap { item -> TranslationOverlay? in
+            guard let text = item.japanese, !text.isEmpty else { return nil }
+            return TranslationOverlay(id: item.id, source: item.source,
+                                      japanese: text, box: item.box, kind: item.kind)
+        }
+        untranslated = entries.compactMap { $0.japanese == nil ? $0.source : nil }
+        translationDetails = entries.map { item in
+            "\(item.id + 1). \(item.japanese ?? "[原文維持] " + item.source)\n原文: \(item.source)"
+        }.joined(separator: "\n\n")
+        translationRevision += 1
+    }
+
+    private func saveCurrentPageToCache(fingerprint: UInt64) {
+        if cached[fingerprint] == nil { cacheOrder.append(fingerprint) }
+        cached[fingerprint] = CachedPage(
+            entries: entries, decorative: decorativeCandidates,
+            overlays: overlays, untranslated: untranslated, details: translationDetails
+        )
+        while cacheOrder.count > 8 {
+            let oldest = cacheOrder.removeFirst()
+            cached.removeValue(forKey: oldest)
+        }
+    }
+
+    /// Manual correction is optional and affects this page's in-memory cache.
+    func moveEntry(id: Int, by offset: Int) {
+        guard !isWorking, let from = entries.firstIndex(where: { $0.id == id }) else { return }
+        let to = from + offset
+        guard entries.indices.contains(to) else { return }
+        entries.swapAt(from, to)
+        rebuildPresentation()
+        if let fingerprint = lastFingerprint { saveCurrentPageToCache(fingerprint: fingerprint) }
+        status = "訳文一覧の読み順を修正しました。"
+    }
+
+    func mergeWithNext(id: Int) {
+        guard !isWorking, let position = entries.firstIndex(where: { $0.id == id }),
+              position + 1 < entries.count else { return }
+        let first = entries[position], next = entries[position + 1]
+        let kind: OCRBlockKind =
+            first.kind == .caption || next.kind == .caption ? .caption : .speech
+        let combined = OCRSegment(index: position, source: first.source + " " + next.source,
+                                  box: first.box.union(next.box), kind: kind,
+                                  lines: first.lines + next.lines)
+        replaceEntries(in: position..<(position + 2), with: [combined])
+    }
+
+    func splitEntry(id: Int) {
+        guard !isWorking, let position = entries.firstIndex(where: { $0.id == id }) else { return }
+        let original = entries[position]
+        guard original.lines.count >= 2 else { return }
+        let pivot = original.lines.count / 2
+        let halves = [Array(original.lines[..<pivot]),
+                      Array(original.lines[pivot...])]
+        let segments = halves.enumerated().map { number, lines -> OCRSegment in
+            let rect = lines.dropFirst().reduce(lines[0].box) { $0.union($1.box) }
+            return OCRSegment(index: position + number,
+                              source: lines.map(\.text).joined(separator: " "),
+                              box: rect, kind: original.kind, lines: lines)
+        }
+        replaceEntries(in: position..<(position + 1), with: segments)
+    }
+
+    private func replaceEntries(in range: Range<Int>, with updated: [OCRSegment]) {
+        let expectedGeneration = generation
+        isWorking = true
+        status = "選択したブロックを再翻訳しています…"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isWorking = false }
+            let translation = await self.translator.translatePage(updated)
+            guard self.generation == expectedGeneration else { return }
+            let replacements = zip(updated, translation.texts).map { segment, text in
+                TranslationEntry(id: segment.index, source: segment.source, japanese: text,
+                                 box: segment.box, kind: segment.kind, lines: segment.lines)
+            }
+            guard range.upperBound <= self.entries.count else { return }
+            self.entries.replaceSubrange(range, with: replacements)
+            self.rebuildPresentation()
+            if let fingerprint = self.lastFingerprint {
+                self.saveCurrentPageToCache(fingerprint: fingerprint)
+            }
+            self.status = "ブロック境界を修正し、訳文を更新しました（端末内キャッシュ）。"
         }
     }
 
