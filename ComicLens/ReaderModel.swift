@@ -196,20 +196,21 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                 return
             }
 
-            let visionSegments: [OCRSegment]
+            let vision: (segments: [OCRSegment], lineCount: Int)
             if demoMode {
                 // The fixture remains testable even if Vision reports an OCR error.
-                visionSegments = (try? await Self.recognize(cgImage)) ?? []
+                vision = (try? await Self.recognize(cgImage)) ?? (segments: [], lineCount: 0)
             } else {
-                visionSegments = try await Self.recognize(cgImage)
+                vision = try await Self.recognize(cgImage)
             }
             guard currentGeneration == generation else { return }
 
             // Only the bundled demo uses DOM coordinates. Kindle/external websites
             // are recognized from displayed pixels only; their DOM is never inspected.
             let demoSegments = demoMode ? (try? await demoBubbleSegments()) ?? [] : []
-            let segments = demoSegments.isEmpty ? visionSegments : demoSegments
-            diagnostics = "画面: 取得成功 / Vision OCR: \(visionSegments.count)件 / " +
+            let segments = demoSegments.isEmpty ? vision.segments : demoSegments
+            diagnostics = "画面: 取得成功 / OCR: \(vision.lineCount)行 → " +
+                "\(vision.segments.count)ブロック / " +
                 (demoMode ? "デモの吹き出し: \(demoSegments.count)件 / " : "") +
                 "AI: \(modelReadiness)"
             guard !segments.isEmpty else {
@@ -256,7 +257,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                 latestSegments = segments
             } else {
                 guard let latestImage = latest.cgImage else { throw SnapshotIssue.empty }
-                latestSegments = try await Self.recognize(latestImage)
+                latestSegments = try await Self.recognize(latestImage).segments
             }
             guard currentGeneration == generation else { return }
             guard PageIdentity.matches(segments.map(\.source),
@@ -358,7 +359,8 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
         return value
     }
 
-    private static func recognize(_ image: CGImage) async throws -> [OCRSegment] {
+    private static func recognize(_ image: CGImage)
+        async throws -> (segments: [OCRSegment], lineCount: Int) {
         try await Task.detached(priority: .userInitiated) {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
@@ -372,14 +374,13 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                 guard value.range(of: "[A-Za-z]{2}", options: .regularExpression) != nil else { return nil }
                 return (value, observation.boundingBox)
             }
-            // Page reading order: top to bottom, then left to right.
-            let sorted = raw.sorted {
-                if abs($0.1.midY - $1.1.midY) > 0.025 { return $0.1.midY > $1.1.midY }
-                return $0.1.minX < $1.1.minX
+            // Merge line OCR before translating, so one bubble does not consume
+            // several slots. Process ALL detected blocks, not just the first 16.
+            let groups = OCRGrouping.merge(raw.map { OCRLine(text: $0.0, box: $0.1) })
+            let segments = groups.enumerated().map {
+                OCRSegment(index: $0.offset, source: $0.element.text, box: $0.element.box)
             }
-            return Array(sorted.prefix(16).enumerated()).map {
-                OCRSegment(index: $0.offset, source: $0.element.0, box: $0.element.1)
-            }
+            return (segments: segments, lineCount: raw.count)
         }.value
     }
 
