@@ -42,4 +42,18 @@ enum DemoPage {
       </script>
     </body></html>
     """#
+
+    /// Only these original sample lines have a deterministic translation fallback.
+    /// Never apply this fixture translation to Kindle or to user-provided books.
+    static func translation(for english: String) -> String? {
+        let examples: [String: String] = [
+            "We need to get out of here before sunrise!": "日の出前にここから脱出しないと！",
+            "There's still time. Trust me!": "まだ間に合う。僕を信じて！",
+            "Did you hear that? Something is moving behind us.": "今の聞こえた？ 後ろで何かが動いている。",
+            "Don't look back. Keep running!": "振り返らないで。走り続けて！",
+            "We made it. The city is safe for now.": "やったぞ。これで街はひとまず安全だ。",
+            "Tomorrow, we start again.": "明日、また始めよう。"
+        ]
+        return examples[english.trimmingCharacters(in: .whitespacesAndNewlines)]
+    }
 }
