@@ -37,7 +37,32 @@ xcodebuild -project ComicLens.xcodeproj -scheme ComicLens \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-`.github/workflows/ios.yml` runs on GitHub-hosted macOS 26 with its stable Xcode 26.x and uploads a `ComicLens.app` simulator ZIP. This **is not an installable iPhone IPA**. A signed device archive/TestFlight release requires your Apple Developer team, signing certificate, provisioning profile and appropriate private CI secrets; none are committed here.
+The repository has two GitHub Actions workflows:
+
+- `.github/workflows/ios.yml`: uploads the iOS **Simulator** app ZIP.
+- `.github/workflows/ipa.yml`: compiles an **arm64 iPhone device build**, packages `Payload/ComicLens.app` into `ComicLens-unsigned.ipa`, validates the package, and uploads `ComicLens-unsigned-iPhone-IPA`. The file has an `.ipa` extension but is **NOT signed, and therefore cannot be installed on a normal iPhone**. It is deliberately labeled unsigned; do not rename or re-sign it with unverified third-party services.
+
+### Optional signed IPA for registered iPhones
+
+The same IPA workflow has a separate signing job. It is skipped until you provide your own Apple signing assets. Set this **Actions repository variable** in GitHub Settings → Secrets and variables → Actions → Variables:
+
+| Variable | Value |
+| --- | --- |
+| `IOS_TEAM_ID` | Your 10-character Apple Developer Team ID |
+
+Then configure these **Actions repository secrets** in Settings → Secrets and variables → Actions → Secrets:
+
+| Secret | Value |
+| --- | --- |
+| `IOS_DISTRIBUTION_P12_BASE64` | Base64 of an **Apple Distribution** certificate exported with its private key as `.p12` |
+| `IOS_DISTRIBUTION_P12_PASSWORD` | Password for that `.p12` |
+| `IOS_ADHOC_PROFILE_BASE64` | Base64 of the **Ad Hoc** `.mobileprovision` profile for the app ID `cloud.dtxmtx.comiclens` |
+
+The Ad Hoc profile must include your iPhone's registered **UDID**, must match the certificate and Team ID, and must be valid/not expired. Generate it in your Apple Developer account. Never commit signing files, passwords, Apple IDs, or device UDIDs to the public repository or send them in chat.
+
+To obtain base64 on macOS: `base64 -i distribution.p12 | tr -d '\\n'`, and similarly for the `.mobileprovision` file. Keep the original private files in a secure location. The workflow imports them into a temporary CI keychain, archives with Xcode, exports using the Xcode `release-testing` (Ad Hoc) method, verifies the signature, and uploads `ComicLens-signed-AdHoc-iPhone-IPA`. The signed job runs only for non-PR events when `IOS_TEAM_ID` is set. If any required secret is missing it fails explicitly with the missing **name**, not its value. It does not upload signing keys.
+
+Apple documentation: [Distribute to registered devices](https://developer.apple.com/documentation/xcode/distributing-your-app-to-registered-devices) and [Create an Ad Hoc profile](https://developer.apple.com/help/account/provisioning-profiles/create-an-ad-hoc-provisioning-profile). A signed Ad Hoc build can only run on iPhones listed in the profile; it is not the same as App Store/TestFlight distribution.
 
 ## Core implementation
 
