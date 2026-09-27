@@ -31,6 +31,12 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Test page identity regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          swiftc ComicLens/PageIdentity.swift Tests/PageIdentityTests.swift -o "$RUNNER_TEMP/page-identity-tests"
+          "$RUNNER_TEMP/page-identity-tests"
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
