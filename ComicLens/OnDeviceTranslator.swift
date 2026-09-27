@@ -8,6 +8,24 @@ struct OCRSegment: Sendable {
     let source: String
     /// Vision coordinates: normalized, origin at bottom-left.
     let box: CGRect
+    let kind: OCRBlockKind
+
+    init(index: Int, source: String, box: CGRect, kind: OCRBlockKind = .speech) {
+        self.index = index
+        self.source = source
+        self.box = box
+        self.kind = kind
+    }
+}
+
+/// The complete ordered reading list, including a segment whose translation
+/// could not be produced. Its number is always the reader marker number.
+struct TranslationEntry: Identifiable {
+    let id: Int
+    let source: String
+    let japanese: String?
+    let box: CGRect
+    let kind: OCRBlockKind
 }
 
 struct TranslationOverlay: Identifiable {
@@ -15,6 +33,7 @@ struct TranslationOverlay: Identifiable {
     let source: String
     let japanese: String
     let box: CGRect
+    let kind: OCRBlockKind
 }
 
 enum TranslationIssue: LocalizedError {
