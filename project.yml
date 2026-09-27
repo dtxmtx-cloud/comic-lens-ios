@@ -1,0 +1,34 @@
+name: ComicLens
+options:
+  bundleIdPrefix: cloud.dtxmtx
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGN_STYLE: Automatic
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_CFBundleDisplayName: "Comic Lens"
+    INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    SUPPORTS_MACCATALYST: NO
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
+targets:
+  ComicLens:
+    type: application
+    platform: iOS
+    sources:
+      - ComicLens
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cloud.dtxmtx.comiclens
+        SWIFT_EMIT_LOC_STRINGS: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+schemes:
+  ComicLens:
+    build:
+      targets:
+        ComicLens: all
+    run:
+      config: Debug
