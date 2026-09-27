@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import FoundationModels
 import SwiftUI
 import UIKit
 import Vision
@@ -13,6 +14,16 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     @Published private(set) var tabDepth = 0
     @Published var diagnostics = "画面: 未取得 / OCR: 未実行 / AI: 未確認"
     private let translator = OnDeviceTranslator()
+    private var modelReadiness: String {
+        let model = SystemLanguageModel.default
+        switch model.availability {
+        case .available:
+            return model.supportsLocale(Locale(identifier: "ja_JP"))
+                ? "利用可能（日本語対応）" : "利用可能だが日本語未対応"
+        case .unavailable(let reason):
+            return "利用不可: \(String(describing: reason))"
+        }
+    }
     private var previousTabs: [(view: WKWebView, isDemo: Bool)] = []
 
     @Published var overlays: [TranslationOverlay] = []
@@ -131,7 +142,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
         generation += 1
         overlays = []
         lastFingerprint = nil
-        diagnostics = "画面: 未取得 / OCR: 未実行 / AI: \(translator.readinessMessage)"
+        diagnostics = "画面: 未取得 / OCR: 未実行 / AI: \(modelReadiness)"
     }
 
     private func snapshot() async throws -> UIImage {
@@ -167,7 +178,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                 return
             }
             if !force && lastFingerprint == fingerprint { return }
-            diagnostics = "画面: 取得成功 / OCR: 処理前 / AI: \(translator.readinessMessage)"
+            diagnostics = "画面: 取得成功 / OCR: 処理前 / AI: \(modelReadiness)"
 
             if let found = cached[fingerprint] {
                 lastFingerprint = fingerprint
@@ -192,7 +203,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             let segments = demoSegments.isEmpty ? visionSegments : demoSegments
             diagnostics = "画面: 取得成功 / Vision OCR: \(visionSegments.count)件 / " +
                 (demoMode ? "デモの吹き出し: \(demoSegments.count)件 / " : "") +
-                "AI: \(translator.readinessMessage)"
+                "AI: \(modelReadiness)"
             guard !segments.isEmpty else {
                 status = "英語を検出できません。画面取得と作品の表示状態を確認してください。"
                 lastFingerprint = fingerprint
