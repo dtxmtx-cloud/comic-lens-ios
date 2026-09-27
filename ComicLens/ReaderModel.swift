@@ -27,6 +27,8 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private var previousTabs: [(view: WKWebView, isDemo: Bool)] = []
 
     @Published var overlays: [TranslationOverlay] = []
+    @Published var untranslated: [String] = []
+    @Published var translationDetails = ""
     @Published var isWorking = false
     @Published var status = "Kindleを開いています"
     @Published var currentAddress = kindleURL
@@ -43,7 +45,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private var lastFingerprint: UInt64?
     private var cached: [UInt64: [TranslationOverlay]] = [:]
     private var cacheOrder: [UInt64] = []
-    private var textCache: [String: [String]] = [:]
+    private var textCache: [String: [String?]] = [:]
     private var textCacheOrder: [String] = []
     private var demoMode = false
 
@@ -143,6 +145,8 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private func resetForPageChange() {
         generation += 1
         overlays = []
+        untranslated = []
+        translationDetails = ""
         lastFingerprint = nil
         diagnostics = "画面: 未取得 / OCR: 未実行 / AI: \(modelReadiness)"
     }
@@ -222,25 +226,27 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             status = "\(segments.count)か所を翻訳しています…"
             let scope = demoMode ? "bundled-demo" : (webView.url?.absoluteString ?? "")
             let textKey = PageIdentity.cacheKey(scope: scope, lines: segments.map(\.source))
-            let translations: [String]
+            let translations: [String?]
             if segments.count >= 2, let saved = textCache[textKey],
                saved.count == segments.count {
                 translations = saved
                 diagnostics += " / 翻訳方式: 本文キャッシュ"
             } else if demoMode, !demoSegments.isEmpty {
                 do {
-                    translations = try await translator.translate(segments)
+                    translations = try await translator.translate(segments).map(Optional.some)
                     diagnostics += " / 翻訳方式: Apple Intelligence"
                 } catch {
-                    // The fixed translation is ONLY for the original demo fixture.
-                    let samples = segments.compactMap { DemoPage.translation(for: $0.source) }
-                    guard samples.count == segments.count else { throw error }
-                    translations = samples
+                    // Fixed translations are only for the bundled original demo.
+                    translations = segments.map { DemoPage.translation(for: $0.source) }
                     diagnostics += " / 翻訳方式: デモ固定訳（AI未使用） / AIの問題: \(error.localizedDescription)"
                 }
             } else {
-                translations = try await translator.translate(segments)
-                diagnostics += " / 翻訳方式: Apple Intelligence"
+                let page = await translator.translatePage(segments)
+                translations = page.texts
+                diagnostics += " / AI: \(page.aiCount)件 / 翻訳専用モデル: \(page.systemCount)件 / 原文維持: \(page.originalCount)件"
+                if page.languagePackNeeded {
+                    diagnostics += " / 言語パック未導入（言語準備ボタン）"
+                }
             }
             guard currentGeneration == generation, segments.count == translations.count else { return }
 
@@ -275,10 +281,17 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
 
             // Use the latest visible text rectangles so scrolling/layout changes
             // do not leave the overlay at the original screen coordinates.
-            let result = zip(latestSegments, translations).map { pair in
-                TranslationOverlay(id: pair.0.index, source: pair.0.source,
-                                   japanese: pair.1, box: pair.0.box)
+            let result = zip(latestSegments, translations).compactMap { pair -> TranslationOverlay? in
+                guard let japanese = pair.1, !japanese.isEmpty else { return nil }
+                return TranslationOverlay(id: pair.0.index, source: pair.0.source,
+                                          japanese: japanese, box: pair.0.box)
             }
+            untranslated = zip(latestSegments, translations).compactMap { pair in
+                pair.1 == nil ? pair.0.source : nil
+            }
+            translationDetails = result.map {
+                "\($0.id + 1). \($0.japanese)\n原文: \($0.source)"
+            }.joined(separator: "\n\n")
             overlays = result
             lastFingerprint = latestFingerprint
             cached[latestFingerprint] = result
@@ -295,7 +308,7 @@ final class ReaderModel: NSObject, ObservableObject, WKNavigationDelegate, WKUID
                     textCache.removeValue(forKey: oldest)
                 }
             }
-            status = "\(result.count)か所を表示しました。原文ボタンで切り替えられます。"
+            status = "\(result.count)か所を翻訳しました。原文維持: \(untranslated.count)件。長文は訳文一覧で確認できます。"
         } catch {
             guard currentGeneration == generation else { return }
             diagnostics += " / エラー: \(error.localizedDescription)"
