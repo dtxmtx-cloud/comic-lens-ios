@@ -24,6 +24,8 @@ targets:
       path: SkyNews/Info.plist
       properties:
         CFBundleDisplayName: "空模様ニュース"
+        CFBundleShortVersionString: "0.2.1"
+        CFBundleVersion: "3"
         NSLocationWhenInUseUsageDescription: "現在地の天気、気温、空気質を表示するため位置情報を使用します。"
         NSCameraUsageDescription: "画面を見ているときだけニュースをスクロールするため、フロントカメラで視線を推定します。カメラ画像や顔データは保存しません。"
         UIStatusBarStyle: UIStatusBarStyleLightContent

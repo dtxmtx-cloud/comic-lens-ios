@@ -117,11 +117,18 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           APP="$RUNNER_TEMP/SkyNewsSimulator/Build/Products/Debug-iphonesimulator/SkyNews.app"
           xcrun simctl install "$DEVICE" "$APP"
-          xcrun simctl launch "$DEVICE" jp.dtxmtx.skynewsflow
+          FIRST_LAUNCH=$(xcrun simctl launch "$DEVICE" jp.dtxmtx.skynewsflow)
+          FIRST_PID=${FIRST_LAUNCH##*: }
+          echo "Initial launch PID: $FIRST_PID"
           sleep 15
-          if ! xcrun simctl spawn "$DEVICE" ps -e -o comm= | grep -q SkyNews; then
-            echo "::error::SkyNews process terminated during simulator smoke test"
+          # Re-launch without termination; simctl returns the existing PID if
+          # the app is still running, and a new PID if it previously crashed.
+          SECOND_LAUNCH=$(xcrun simctl launch "$DEVICE" jp.dtxmtx.skynewsflow)
+          SECOND_PID=${SECOND_LAUNCH##*: }
+          echo "After 15 seconds PID: $SECOND_PID"
+          if [ -z "$FIRST_PID" ] || [ "$FIRST_PID" != "$SECOND_PID" ]; then
+            echo "::error::SkyNews terminated or restarted during simulator smoke test"
             xcrun simctl spawn "$DEVICE" log show --last 2m --style compact --predicate 'eventMessage CONTAINS "SkyNews"' | tail -n 80 || true
             exit 1
           fi
-          echo "SkyNews remained running 15 seconds after launch."
+          echo "SkyNews retained process $FIRST_PID for 15 seconds."
