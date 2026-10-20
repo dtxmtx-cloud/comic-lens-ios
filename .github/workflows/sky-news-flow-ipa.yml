@@ -1,0 +1,74 @@
+name: Sky News Flow iOS IPA
+
+on:
+  push:
+    branches: [sky-news-flow-ios]
+    paths:
+      - "weather-news-ios/**"
+      - ".github/workflows/sky-news-flow-ipa.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-ipa:
+    runs-on: macos-15
+    timeout-minutes: 50
+    defaults:
+      run:
+        working-directory: weather-news-ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+      - name: Build unsigned iPhone application
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project SkyNews.xcodeproj \
+            -scheme SkyNews \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/SkyNewsDerived" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            build > "$RUNNER_TEMP/skynews-build.log" 2>&1 || {
+              tail -n 150 "$RUNNER_TEMP/skynews-build.log"
+              exit 1
+            }
+          tail -n 20 "$RUNNER_TEMP/skynews-build.log"
+      - name: Create unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/SkyNewsDerived/Build/Products/Release-iphoneos/SkyNews.app"
+          test -d "$APP"
+          mkdir -p "$RUNNER_TEMP/SkyNewsPayload/Payload"
+          ditto "$APP" "$RUNNER_TEMP/SkyNewsPayload/Payload/SkyNews.app"
+          (cd "$RUNNER_TEMP/SkyNewsPayload" && zip -qry "$GITHUB_WORKSPACE/SkyNews-unsigned.ipa" Payload)
+          test -s "$GITHUB_WORKSPACE/SkyNews-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SkyNews-unsigned-IPA
+          path: SkyNews-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - name: Copy compile log on failure
+        if: failure()
+        run: cp "$RUNNER_TEMP/skynews-build.log" "$GITHUB_WORKSPACE/SkyNews-compile-log.txt"
+      - name: Upload compile log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkyNews-compile-log
+          path: SkyNews-compile-log.txt
+          if-no-files-found: ignore
+          retention-days: 14
