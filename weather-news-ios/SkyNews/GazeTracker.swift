@@ -46,7 +46,7 @@ final class GazeTracker: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var status: GazeStatus = .off
     @Published private(set) var scrollAllowed = true
 
-    private let session = ARSession()
+    private var session: ARSession?
     private var running = false
     private var generation = 0
     private var candidate: Bool?
@@ -54,12 +54,13 @@ final class GazeTracker: NSObject, ObservableObject, ARSessionDelegate {
     private var stopDelay: TimeInterval = 0.8
     private var resumeDelay: TimeInterval = 0.5
     private var lastFrameAt = Date()
+    private var lastSampledAt = Date.distantPast
     private var watchdog: Timer?
 
     override init() {
         super.init()
-        session.delegate = self
-        session.delegateQueue = DispatchQueue.main
+        // ARSession is created only after gaze mode is enabled and supported.
+        // Normal news scrolling never instantiates a camera tracking session.
     }
 
     func configure(enabled: Bool, active: Bool, stopAfter: Double, resumeAfter: Double) {
@@ -120,7 +121,12 @@ final class GazeTracker: NSObject, ObservableObject, ARSessionDelegate {
         let configuration = ARFaceTrackingConfiguration()
         configuration.maximumNumberOfTrackedFaces = 1
         configuration.isLightEstimationEnabled = false
-        session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        let newSession = ARSession()
+        newSession.delegate = self
+        newSession.delegateQueue = DispatchQueue.main
+        session = newSession
+        lastSampledAt = .distantPast
+        newSession.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         watchdog?.invalidate()
         watchdog = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.checkFrames() }
@@ -129,7 +135,9 @@ final class GazeTracker: NSObject, ObservableObject, ARSessionDelegate {
 
     private func stopSession() {
         generation += 1
-        if running { session.pause() }
+        if running { session?.pause() }
+        session?.delegate = nil
+        session = nil
         running = false
         watchdog?.invalidate()
         watchdog = nil
@@ -149,8 +157,11 @@ final class GazeTracker: NSObject, ObservableObject, ARSessionDelegate {
 
     private func sample(looking: Bool) {
         guard running else { return }
-        lastFrameAt = Date()
-        let now = lastFrameAt
+        let now = Date()
+        lastFrameAt = now
+        // Limit eye estimation to ~8 samples/second, not camera frame rate.
+        guard now.timeIntervalSince(lastSampledAt) >= 0.12 else { return }
+        lastSampledAt = now
         if candidate != looking {
             candidate = looking
             candidateSince = now

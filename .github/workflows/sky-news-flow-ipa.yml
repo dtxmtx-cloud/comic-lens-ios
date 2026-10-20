@@ -72,3 +72,56 @@ jobs:
           path: SkyNews-compile-log.txt
           if-no-files-found: ignore
           retention-days: 14
+  simulator-smoke:
+    name: Simulator launch and memory smoke test
+    needs: unsigned-ipa
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: weather-news-ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+      - name: Compile simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project SkyNews.xcodeproj -scheme SkyNews \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/SkyNewsSimulator" \
+            CODE_SIGNING_ALLOWED=NO build > "$RUNNER_TEMP/skynews-simulator-build.log" 2>&1 || {
+              tail -n 100 "$RUNNER_TEMP/skynews-simulator-build.log"
+              exit 1
+            }
+      - name: Launch simulator app and detect early termination
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE=$(xcrun simctl list devices available --json | python3 -c '
+          import sys,json
+          payload=json.load(sys.stdin)
+          matches=[d["udid"] for devices in payload["devices"].values()
+                   for d in devices
+                   if d["name"].startswith("iPhone") and d["state"]=="Shutdown"]
+          print(matches[0] if matches else "")')
+          if [ -z "$DEVICE" ]; then
+            echo "::warning::No available iPhone Simulator; runtime smoke test skipped"
+            exit 0
+          fi
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          APP="$RUNNER_TEMP/SkyNewsSimulator/Build/Products/Debug-iphonesimulator/SkyNews.app"
+          xcrun simctl install "$DEVICE" "$APP"
+          xcrun simctl launch "$DEVICE" jp.dtxmtx.skynewsflow
+          sleep 15
+          if ! xcrun simctl spawn "$DEVICE" ps -e -o comm= | grep -q SkyNews; then
+            echo "::error::SkyNews process terminated during simulator smoke test"
+            xcrun simctl spawn "$DEVICE" log show --last 2m --style compact --predicate 'eventMessage CONTAINS "SkyNews"' | tail -n 80 || true
+            exit 1
+          fi
+          echo "SkyNews remained running 15 seconds after launch."

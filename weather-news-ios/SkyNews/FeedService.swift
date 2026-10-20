@@ -218,7 +218,7 @@ final class NewsStore: ObservableObject {
 
         await withTaskGroup(of: (String, String?).self) { group in
             var iterator = candidates.makeIterator()
-            for _ in 0..<min(3, candidates.count) {
+            for _ in 0..<min(2, candidates.count) {
                 if let item = iterator.next() {
                     group.addTask {
                         (item.id, await ArticlePageExtractor.fetch(for: item))

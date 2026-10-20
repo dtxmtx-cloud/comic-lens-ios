@@ -27,7 +27,11 @@ final class ContinuouslyScrollingNews: UIScrollView {
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval?
     private var currentSignature = ""
-    private var firstCycle: UIStackView?
+    // A fixed-size rolling window prevents hundreds of full-body UILabels
+    // from exhausting memory when publisher articles are long.
+    private let windowCount = 4
+    private var sourceArticles: [NewsArticle] = []
+    private var nextArticleIndex = 0
     private var rows: [(String, UIView)] = []
     private var lastID: String?
 
@@ -59,37 +63,64 @@ final class ContinuouslyScrollingNews: UIScrollView {
         displayLink = link
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
 
     deinit { displayLink?.invalidate() }
 
     func render(_ articles: [NewsArticle], textSize: CGFloat) {
-        let signature = articles.map { $0.id + ":" + String($0.body.hashValue) }.joined(separator: "\n") + "|" + String(describing: textSize)
+        // Count + a short prefix is sufficient for detecting a body update,
+        // without repeatedly hashing every byte of 250 lengthy news articles.
+        let signature = articles.map {
+            $0.id + ":" + String($0.body.count) + ":" +
+            String($0.body.prefix(80).hashValue)
+        }.joined(separator: "\n") + "|" + String(describing: textSize)
         guard signature != currentSignature else { return }
         currentSignature = signature
+        sourceArticles = articles
+        nextArticleIndex = 0
         rows.removeAll()
-        firstCycle = nil
+        lastID = nil
         for child in column.arrangedSubviews {
             column.removeArrangedSubview(child)
             child.removeFromSuperview()
         }
-        guard !articles.isEmpty else { return }
-        for repeatIndex in 0..<2 {
-            let group = UIStackView()
-            group.axis = .vertical
-            group.alignment = .fill
-            group.distribution = .fill
-            group.spacing = 14
-            for article in articles {
-                let panel = makePanel(article, textSize: textSize)
-                group.addArrangedSubview(panel)
-                if repeatIndex == 0 { rows.append((article.id, panel)) }
-            }
-            column.addArrangedSubview(group)
-            if repeatIndex == 0 { firstCycle = group }
+        guard !sourceArticles.isEmpty else { return }
+        for _ in 0..<windowCount {
+            appendNextArticle(textSize: textSize)
         }
         setContentOffset(.zero, animated: false)
-        lastID = nil
+        onVisibleArticle?(sourceArticles[0].id)
+    }
+
+    private var currentTextSize: CGFloat = 20
+
+    private func appendNextArticle(textSize: CGFloat) {
+        guard !sourceArticles.isEmpty else { return }
+        currentTextSize = textSize
+        let article = sourceArticles[nextArticleIndex]
+        nextArticleIndex = (nextArticleIndex + 1) % sourceArticles.count
+        let panel = makePanel(article, textSize: textSize)
+        column.addArrangedSubview(panel)
+        rows.append((article.id, panel))
+    }
+
+    private func recycleRows(at scrollY: inout CGFloat) {
+        // Remove only rows completely above the viewport. Height is measured
+        // before removal, then subtracted from content offset after relayout.
+        for _ in 0..<windowCount {
+            guard rows.count > 2, let first = rows.first else { return }
+            let consumedHeight = first.1.bounds.height + column.spacing
+            guard consumedHeight > 0, scrollY >= first.1.frame.maxY + column.spacing else { return }
+            rows.removeFirst()
+            column.removeArrangedSubview(first.1)
+            first.1.removeFromSuperview()
+            appendNextArticle(textSize: currentTextSize)
+            scrollY = max(0, scrollY - consumedHeight)
+            layoutIfNeeded()
+            setContentOffset(CGPoint(x: 0, y: scrollY), animated: false)
+        }
     }
 
     private func makePanel(_ article: NewsArticle, textSize: CGFloat) -> UIView {
@@ -142,19 +173,19 @@ final class ContinuouslyScrollingNews: UIScrollView {
         let timestamp = link.timestamp
         defer { lastTimestamp = timestamp }
         guard let previous = lastTimestamp else { return }
-        if manualPause || isDragging || isDecelerating || window == nil { return }
+        guard !manualPause && !isDragging && !isDecelerating && window != nil else { return }
+        guard !sourceArticles.isEmpty else { return }
         let elapsed = min(0.1, max(0, timestamp - previous))
         guard elapsed > 0 else { return }
         layoutIfNeeded()
-        let cycle = (firstCycle?.bounds.height ?? 0) + column.spacing
-        let maximum = contentSize.height - bounds.height
-        guard cycle > 0, maximum > 0 else { return }
-        var y = contentOffset.y + speed * CGFloat(elapsed)
-        if y >= cycle { y -= cycle }
-        if y > maximum { y = 0 }
-        setContentOffset(CGPoint(x: 0, y: max(0, y)), animated: false)
-        let cyclePosition = y.truncatingRemainder(dividingBy: cycle)
-        if let index = rows.lastIndex(where: { $0.1.frame.minY <= cyclePosition + 60 }) {
+        let maximum = max(0, contentSize.height - bounds.height)
+        guard maximum > 0 else { return }
+        var y = min(maximum, contentOffset.y + speed * CGFloat(elapsed))
+        recycleRows(at: &y)
+        setContentOffset(CGPoint(x: 0, y: y), animated: false)
+
+        // The position refers to the current 4-row rolling window.
+        if let index = rows.lastIndex(where: { $0.1.frame.minY <= y + 64 }) {
             let id = rows[index].0
             if lastID != id {
                 lastID = id

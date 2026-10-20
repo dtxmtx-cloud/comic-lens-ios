@@ -49,3 +49,11 @@ gaze estimates are used to decide whether to scroll. The face-tracking session
 is stopped when the app is backgrounded, settings are shown or the option is
 disabled. Battery consumption rises while camera tracking is active. ARKit
 isSupport check is performed at runtime, so the app installs on other iPhones.
+
+## Stability changes (0.2.1)
+
+Native article panels are now recycled with a 4-card rolling window. Previous
+releases eagerly rendered up to 500 full-length panels, which could exhaust
+iPhone memory. The camera ARSession is created only when gaze control is
+explicitly turned on, and gaze updates are sampled at roughly 8Hz. HTML
+article extraction uses at most two concurrent requests to reduce peaks.
