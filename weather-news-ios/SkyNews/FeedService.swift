@@ -128,6 +128,7 @@ final class NewsStore: ObservableObject {
     @Published private(set) var articles: [NewsArticle] = []
     @Published private(set) var loading = false
     @Published private(set) var message: String?
+    private var webFetchAttempts: [String: Date] = [:]
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "feed.cached"),
@@ -196,8 +197,8 @@ final class NewsStore: ObservableObject {
             ($0.textSource != "rssFull" || $0.body.count < 900) &&
             webFetchAttempts[$0.id] == nil
         }
-        let sourceNames = Array(Set(eligible.map(\.source))).sorted()
-        let groups = Dictionary(grouping: eligible, by: \.source)
+        let sourceNames = Array(Set(eligible.map { $0.source })).sorted()
+        let groups = Dictionary(grouping: eligible, by: { $0.source })
         var offsets: [String: Int] = [:]
         var candidates: [NewsArticle] = []
         while candidates.count < maxPages {
