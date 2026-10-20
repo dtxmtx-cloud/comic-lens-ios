@@ -10,6 +10,7 @@ struct ContentView: View {
     @AppStorage("news.scrollSpeed") private var scrollSpeed = 17.0
     @AppStorage("news.fontSize") private var fontSize = 20.0
     @AppStorage("news.preferencePercent") private var preferencePercent = 70
+    @AppStorage("news.fetchWebBodies") private var fetchWebBodies = true
     @State private var showSettings = false
     @State private var paused = false
     @State private var visibleArticleID: String?
@@ -82,19 +83,19 @@ struct ContentView: View {
         }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .task {
-            await news.refresh(feeds.sources)
+            await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies)
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 600_000_000_000)
                 guard !Task.isCancelled else { break }
-                await news.refresh(feeds.sources)
+                await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies)
                 await weather.refresh()
             }
         }
         .sheet(isPresented: $showSettings, onDismiss: {
-            Task { await news.refresh(feeds.sources) }
+            Task { await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies) }
         }) {
             SettingsView(sources: feeds, interest: interests) {
-                Task { await news.refresh(feeds.sources) }
+                Task { await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies) }
             }
         }
     }

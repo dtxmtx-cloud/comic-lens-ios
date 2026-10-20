@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage("news.scrollSpeed") private var scrollSpeed = 17.0
     @AppStorage("news.fontSize") private var fontSize = 20.0
     @AppStorage("news.preferencePercent") private var preferencePercent = 70
+    @AppStorage("news.fetchWebBodies") private var fetchWebBodies = true
     @State private var newSourceName = ""
     @State private var newSourceURL = ""
     @State private var invalidURL = false
@@ -47,6 +48,12 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("記事本文") {
+                    Toggle("RSSが概要のみなら記事URLから本文を取得", isOn: $fetchWebBodies)
+                    Text("一般公開されたHTML本文のみを抽出します。配信元の条件やアクセス制限により取得できない場合は、RSSの概要を表示します。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+
                 Section("RSS配信元") {
                     ForEach(sources.sources) { source in
                         Toggle(isOn: Binding(
@@ -81,7 +88,7 @@ struct SettingsView: View {
                 }
 
                 Section("記事本文について") {
-                    Text("RSSに全文が含まれる場合は全文を表示します。配信元が要約のみを提供する場合は要約を表示し、元記事へのリンクを提供します。")
+                    Text("RSSに全文があればそのまま表示します。概要だけの場合は一般公開HTMLからの本文抽出を試み、できない場合は概要と元記事リンクを表示します。ログインや有料記事の制限は回避しません。")
                         .font(.footnote)
                     Text("評価履歴は端末内にのみ保存します。ニュース取得と天気取得には通信が必要です。")
                         .font(.footnote)

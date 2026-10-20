@@ -3,10 +3,11 @@ import Foundation
 struct NewsArticle: Identifiable, Codable, Hashable {
     let id: String
     let title: String
-    let body: String
+    var body: String
     let url: URL
     let source: String
     let publishedAt: Date
+    var textSource: String? = nil
     var previewText: String { body.isEmpty ? "記事本文・概要は配信されていません。元記事を開いてください。" : body }
 }
 

@@ -64,7 +64,7 @@ final class ContinuouslyScrollingNews: UIScrollView {
     deinit { displayLink?.invalidate() }
 
     func render(_ articles: [NewsArticle], textSize: CGFloat) {
-        let signature = articles.map(\.id).joined(separator: "\n") + "|" + String(describing: textSize)
+        let signature = articles.map { $0.id + ":" + String($0.body.hashValue) }.joined(separator: "\n") + "|" + String(describing: textSize)
         guard signature != currentSignature else { return }
         currentSignature = signature
         rows.removeAll()
@@ -102,7 +102,7 @@ final class ContinuouslyScrollingNews: UIScrollView {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let source = UILabel()
-        source.text = article.source + "  ·  " +
+        source.text = article.source + "  ·  " + (article.textSource == "web" ? "Web本文" : (article.textSource == "rssFull" ? "RSS本文" : "概要")) + "  ·  " +
             article.publishedAt.formatted(date: .abbreviated, time: .shortened)
         source.font = .systemFont(ofSize: max(11, textSize * 0.66), weight: .medium)
         source.textColor = UIColor.white.withAlphaComponent(0.80)

@@ -75,7 +75,8 @@ private final class RSSParser: NSObject, XMLParserDelegate {
             body: Self.plainText(text),
             url: url,
             source: source.name,
-            publishedAt: Self.readDate(dateText) ?? Date()
+            publishedAt: Self.readDate(dateText) ?? Date(),
+            textSource: (fields["content:encoded"] != nil || fields["content"] != nil) ? "rssFull" : "rssExcerpt"
         )
     }
 
@@ -135,7 +136,8 @@ final class NewsStore: ObservableObject {
         }
     }
 
-    func refresh(_ sources: [FeedSource]) async {
+    func refresh(_ sources: [FeedSource], fetchWebBodies: Bool = true) async {
+        guard !loading else { return }
         let enabled = sources.filter(\.enabled)
         guard !enabled.isEmpty else {
             message = "設定からRSS配信元を有効にしてください。"
@@ -164,15 +166,67 @@ final class NewsStore: ObservableObject {
         let unique = Dictionary(grouping: incoming, by: \.id).compactMap { $0.value.first }
         let sorted = unique.sorted { $0.publishedAt > $1.publishedAt }
         if !sorted.isEmpty {
-            articles = Array(sorted.prefix(250))
-            if let data = try? JSONEncoder().encode(articles) {
-                UserDefaults.standard.set(data, forKey: "feed.cached")
+            let oldWebBodies = Dictionary(
+                uniqueKeysWithValues: articles.filter { $0.textSource == "web" }.map { ($0.id, $0) }
+            )
+            articles = Array(sorted.prefix(250)).map { item in
+                guard let cached = oldWebBodies[item.id],
+                      cached.body.count > item.body.count else { return item }
+                return cached
             }
             message = nil
+            persist()
+            if fetchWebBodies { await enrichFromWeb(maxPages: 24) }
         } else {
             message = articles.isEmpty
                 ? "記事を取得できませんでした。通信状況とRSSのURLを確認してください。"
                 : "最新記事を取得できませんでした。保存済みの記事を表示しています。"
         }
     }
+
+    private func enrichFromWeb(maxPages: Int) async {
+        let candidates = Array(articles.filter {
+            $0.textSource != "web" &&
+            ($0.textSource != "rssFull" || $0.body.count < 900)
+        }.prefix(maxPages))
+        guard !candidates.isEmpty else { return }
+
+        await withTaskGroup(of: (String, String?).self) { group in
+            var iterator = candidates.makeIterator()
+            for _ in 0..<min(3, candidates.count) {
+                if let item = iterator.next() {
+                    group.addTask {
+                        (item.id, await ArticlePageExtractor.fetch(for: item))
+                    }
+                }
+            }
+            var extractedBodies: [String: String] = [:]
+            for await (id, text) in group {
+                if let text { extractedBodies[id] = text }
+                if let nextItem = iterator.next() {
+                    group.addTask {
+                        (nextItem.id, await ArticlePageExtractor.fetch(for: nextItem))
+                    }
+                }
+            }
+            if !extractedBodies.isEmpty {
+                var enriched = articles
+                for index in enriched.indices {
+                    if let body = extractedBodies[enriched[index].id] {
+                        enriched[index].body = body
+                        enriched[index].textSource = "web"
+                    }
+                }
+                articles = enriched
+            }
+        }
+        persist()
+    }
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(articles) {
+            UserDefaults.standard.set(data, forKey: "feed.cached")
+        }
+    }
+
 }
