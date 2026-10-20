@@ -64,7 +64,7 @@ final class ContinuouslyScrollingNews: UIScrollView {
     deinit { displayLink?.invalidate() }
 
     func render(_ articles: [NewsArticle], textSize: CGFloat) {
-        let signature = articles.map(\.id).joined(separator: "\n") + "|" + String(textSize)
+        let signature = articles.map(\.id).joined(separator: "\n") + "|" + String(describing: textSize)
         guard signature != currentSignature else { return }
         currentSignature = signature
         rows.removeAll()
