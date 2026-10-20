@@ -52,7 +52,7 @@ enum ArticlePageExtractor {
         ] {
             guard let elements = try? document.select(selector) else { continue }
             for element in elements.array().prefix(6) {
-                let cloned = element.clone()
+                let cloned = element
                 if let noisy = try? cloned.select(
                     "script, style, nav, footer, header, aside, form, button, iframe, " +
                     ".related, .recommend, .recommended, .share, .social, " +
