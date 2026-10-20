@@ -10,6 +10,9 @@ struct SettingsView: View {
     @AppStorage("news.fontSize") private var fontSize = 20.0
     @AppStorage("news.preferencePercent") private var preferencePercent = 70
     @AppStorage("news.fetchWebBodies") private var fetchWebBodies = true
+    @AppStorage("gaze.enabled") private var gazeEnabled = false
+    @AppStorage("gaze.stopDelay") private var gazeStopDelay = 0.8
+    @AppStorage("gaze.resumeDelay") private var gazeResumeDelay = 0.5
     @State private var newSourceName = ""
     @State private var newSourceURL = ""
     @State private var invalidURL = false
@@ -28,6 +31,24 @@ struct SettingsView: View {
                         Slider(value: $fontSize, in: 14...30, step: 1)
                     }
                     Text("画面下部の一時停止ボタンで、いつでも止められます。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+
+                Section("視線連動スクロール") {
+                    Toggle("画面を見ている間だけスクロール", isOn: $gazeEnabled)
+                    VStack(alignment: .leading) {
+                        Text(String(format: "視線が外れて %.1f 秒で停止", gazeStopDelay))
+                        Slider(value: $gazeStopDelay, in: 0.2...3.0, step: 0.1)
+                    }
+                    .disabled(!gazeEnabled)
+                    VStack(alignment: .leading) {
+                        Text(String(format: "画面を見ると %.1f 秒で再開", gazeResumeDelay))
+                        Slider(value: $gazeResumeDelay, in: 0.2...3.0, step: 0.1)
+                    }
+                    .disabled(!gazeEnabled)
+                    Text("視線はARKitによる推定です。初回にカメラの使用許可が必要です。非対応機種・権限なし・カメラエラー時は通常スクロールします。手動の一時停止は常に優先されます。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("カメラ画像や顔・視線データを記録・送信しません。アプリの表示中だけカメラを使用します。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 

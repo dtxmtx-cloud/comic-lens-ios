@@ -6,11 +6,16 @@ struct ContentView: View {
     @StateObject private var feeds = SourceStore()
     @StateObject private var news = NewsStore()
     @StateObject private var interests = InterestStore()
+    @StateObject private var gaze = GazeTracker()
+    @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("news.scrollSpeed") private var scrollSpeed = 17.0
     @AppStorage("news.fontSize") private var fontSize = 20.0
     @AppStorage("news.preferencePercent") private var preferencePercent = 70
     @AppStorage("news.fetchWebBodies") private var fetchWebBodies = true
+    @AppStorage("gaze.enabled") private var gazeEnabled = false
+    @AppStorage("gaze.stopDelay") private var gazeStopDelay = 0.8
+    @AppStorage("gaze.resumeDelay") private var gazeResumeDelay = 0.5
     @State private var showSettings = false
     @State private var paused = false
     @State private var visibleArticleID: String?
@@ -43,6 +48,15 @@ struct ContentView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 6)
 
+                if gazeEnabled {
+                    Label(gaze.status.label, systemImage: gaze.status.systemImage)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.88))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .accessibilityLabel("視線連動: " + gaze.status.label)
+                }
+
                 if ordered.isEmpty {
                     VStack(spacing: 12) {
                         ProgressView().tint(.white)
@@ -57,7 +71,7 @@ struct ContentView: View {
                         articles: ordered,
                         pointsPerSecond: scrollSpeed,
                         textSize: fontSize,
-                        paused: paused,
+                        paused: paused || (gazeEnabled && !gaze.scrollAllowed),
                         onVisibleArticle: { id in
                             if visibleArticleID != id {
                                 DispatchQueue.main.async { visibleArticleID = id }
@@ -80,8 +94,18 @@ struct ContentView: View {
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             weather.start()
+            configureGaze()
         }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            gaze.configure(enabled: false, active: false,
+                           stopAfter: gazeStopDelay, resumeAfter: gazeResumeDelay)
+        }
+        .onChange(of: gazeEnabled) { _, _ in configureGaze() }
+        .onChange(of: gazeStopDelay) { _, _ in configureGaze() }
+        .onChange(of: gazeResumeDelay) { _, _ in configureGaze() }
+        .onChange(of: scenePhase) { _, _ in configureGaze() }
+        .onChange(of: showSettings) { _, _ in configureGaze() }
         .task {
             await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies)
             while !Task.isCancelled {
@@ -98,6 +122,15 @@ struct ContentView: View {
                 Task { await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies) }
             }
         }
+    }
+
+    private func configureGaze() {
+        gaze.configure(
+            enabled: gazeEnabled,
+            active: scenePhase == .active && !showSettings,
+            stopAfter: gazeStopDelay,
+            resumeAfter: gazeResumeDelay
+        )
     }
 
     private var clockAndWeather: some View {

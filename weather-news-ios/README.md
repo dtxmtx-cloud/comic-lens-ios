@@ -9,6 +9,8 @@ Requirements: iOS 17 or later.
 - On-device likes and dislikes; Japanese and English keyword personalization
 - Adjustable scroll speed, font size, favorite-to-latest ratio, custom HTTPS RSS
 - AQI and UV index from Open-Meteo; 10-minute refresh and cached articles
+- Opt-in ARKit face/gaze estimation: 0.8s looking away pauses, 0.5s looking resumes
+- Adjustable gaze timing, manual pause precedence; unsupported/denied -> normal scroll
 
 ## Build
 With XcodeGen installed on macOS:
@@ -30,3 +32,20 @@ summary and the original link. It never bypasses paywalls or logins. Follow
 each publisher's usage terms. JavaScript-only sites may not be supported. On-device ratings and
 cached articles are saved locally. Weather services receive coordinates.
 The app cannot replace the lock screen or scroll after iOS suspends it.
+## Gaze detection and privacy
+
+The optional gaze feature starts disabled. When enabled it uses ARKit
+ARFaceTrackingConfiguration and the camera permission prompt.
+The app estimates whether the user's eyes are directed toward the display,
+using ARFaceAnchor.lookAtPoint and hysteresis (configurable), not whether the
+person is actually reading. An enabled session pauses automatically when
+face tracking is lost. On unsupported devices, denied permission, camera errors
+or interrupted sessions, the app reverts to regular automatic scrolling and
+shows a status. Manual pause always overrides gaze events.
+
+No face image, eye image, ARFrame, eye coordinate, or face geometry is stored,
+uploaded, transmitted or used for identity recognition; only transient binary
+gaze estimates are used to decide whether to scroll. The face-tracking session
+is stopped when the app is backgrounded, settings are shown or the option is
+disabled. Battery consumption rises while camera tracking is active. ARKit
+isSupport check is performed at runtime, so the app installs on other iPhones.
