@@ -185,11 +185,35 @@ final class NewsStore: ObservableObject {
     }
 
     private func enrichFromWeb(maxPages: Int) async {
-        let candidates = Array(articles.filter {
+        // Round-robin by RSS source, rather than taking the globally newest
+        // 24 entries: one high-volume feed must not starve other publishers.
+        let now = Date()
+        webFetchAttempts = webFetchAttempts.filter {
+            now.timeIntervalSince($0.value) < 1800
+        }
+        let eligible = articles.filter {
             $0.textSource != "web" &&
-            ($0.textSource != "rssFull" || $0.body.count < 900)
-        }.prefix(maxPages))
+            ($0.textSource != "rssFull" || $0.body.count < 900) &&
+            webFetchAttempts[$0.id] == nil
+        }
+        let sourceNames = Array(Set(eligible.map(\.source))).sorted()
+        let groups = Dictionary(grouping: eligible, by: \.source)
+        var offsets: [String: Int] = [:]
+        var candidates: [NewsArticle] = []
+        while candidates.count < maxPages {
+            let before = candidates.count
+            for source in sourceNames {
+                guard candidates.count < maxPages else { break }
+                let items = groups[source] ?? []
+                let index = offsets[source, default: 0]
+                guard index < items.count else { continue }
+                candidates.append(items[index])
+                offsets[source] = index + 1
+            }
+            if candidates.count == before { break }
+        }
         guard !candidates.isEmpty else { return }
+        for article in candidates { webFetchAttempts[article.id] = now }
 
         await withTaskGroup(of: (String, String?).self) { group in
             var iterator = candidates.makeIterator()

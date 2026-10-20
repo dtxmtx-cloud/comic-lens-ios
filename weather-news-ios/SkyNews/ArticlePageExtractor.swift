@@ -24,15 +24,48 @@ enum ArticlePageExtractor {
             let html = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .shiftJIS)
                 ?? String(decoding: data, as: UTF8.self)
-            return extract(from: html, existingText: article.body)
+            return extract(from: html, existingText: article.body, host: host)
         } catch {
             return nil
         }
     }
 
     /// Pure parser: can be regression-tested with fixture HTML without network access.
-    static func extract(from html: String, existingText: String = "") -> String? {
+    static func extract(from html: String, existingText: String = "", host: String = "") -> String? {
         guard let document = try? SwiftSoup.parse(html) else { return nil }
+
+        // GIGAZINE has historically used #article .cntimage and p.preface,
+        // neither of which matches our generic article-body selectors.
+        // Extract the scoped article before broad containers like <main>.
+        let minLength = max(150, Int(Double(existingText.count) * 1.15))
+        if host == "gigazine.net" || host.hasSuffix(".gigazine.net") {
+            let selectors = [
+                "#article .cntimage",
+                "#article p.preface",
+                "#article .preface",
+                "p.preface"
+            ]
+            var scopedCandidates: [String] = []
+            for selector in selectors {
+                guard let elements = try? document.select(selector) else { continue }
+                var paragraphs: [String] = []
+                for element in elements.array().prefix(200) {
+                    // text() includes nested inline markup; each p becomes a paragraph.
+                    let value = normalized((try? element.text()) ?? "")
+                    if value.count >= 12 && paragraphs.last != value {
+                        paragraphs.append(value)
+                    }
+                }
+                let content = paragraphs.joined(separator: "\n\n")
+                if content.count >= minLength && content.count <= 80_000 {
+                    scopedCandidates.append(content)
+                }
+            }
+            if let best = scopedCandidates.max(by: { $0.count < $1.count }) {
+                return best
+            }
+        }
+
         var candidates: [String] = []
 
         for selector in [
@@ -93,7 +126,6 @@ enum ArticlePageExtractor {
         guard let best = candidates.max(by: { $0.count < $1.count }) else { return nil }
 
         // Do not replace an RSS excerpt with shorter navigation / boilerplate.
-        let minLength = max(150, Int(Double(existingText.count) * 1.15))
         guard best.count >= minLength else { return nil }
         return best
     }
