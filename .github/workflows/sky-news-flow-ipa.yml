@@ -60,7 +60,7 @@ jobs:
           name: SkyNews-unsigned-IPA
           path: SkyNews-unsigned.ipa
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
       - name: Copy compile log on failure
         if: failure()
         run: cp "$RUNNER_TEMP/skynews-build.log" "$GITHUB_WORKSPACE/SkyNews-compile-log.txt"
@@ -71,7 +71,7 @@ jobs:
           name: SkyNews-compile-log
           path: SkyNews-compile-log.txt
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 30
   simulator-smoke:
     name: Simulator launch and memory smoke test
     needs: unsigned-ipa
