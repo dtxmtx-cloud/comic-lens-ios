@@ -6,6 +6,10 @@ struct SettingsView: View {
     @ObservedObject var interest: InterestStore
     let refresh: () -> Void
 
+    @AppStorage("news.displayMode") private var displayMode = "headlines"
+    @AppStorage("news.tickerLaneCount") private var tickerLaneCount = 6
+    @AppStorage("news.tickerSpeed") private var tickerSpeed = 42.0
+    @AppStorage("news.tickerFontSize") private var tickerFontSize = 19.0
     @AppStorage("news.scrollSpeed") private var scrollSpeed = 17.0
     @AppStorage("news.fontSize") private var fontSize = 20.0
     @AppStorage("news.preferencePercent") private var preferencePercent = 70
@@ -21,14 +25,42 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("ニュースの流れ方") {
-                    VStack(alignment: .leading) {
-                        Text("スクロール速度：\(Int(scrollSpeed)) pt/秒")
-                        Slider(value: $scrollSpeed, in: 4...60, step: 1)
+                Section("表示モード") {
+                    Picker("ニュース表示", selection: $displayMode) {
+                        Text("見出し").tag("headlines")
+                        Text("全文").tag("fullText")
                     }
-                    VStack(alignment: .leading) {
-                        Text("文字サイズ：\(Int(fontSize)) pt")
-                        Slider(value: $fontSize, in: 14...30, step: 1)
+                    .pickerStyle(.segmented)
+                    Text("見出しモードはRSSの記事タイトルだけを横に流します。見出しをタップすると元記事を開き、長押しで興味あり・なしを選べます。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+
+                Section("ニュースの流れ方") {
+                    if displayMode == "headlines" {
+                        VStack(alignment: .leading) {
+                            Text("レーン数：\(tickerLaneCount) 行")
+                            Slider(value: Binding(
+                                get: { Double(tickerLaneCount) },
+                                set: { tickerLaneCount = Int($0) }
+                            ), in: 2...6, step: 1)
+                        }
+                        VStack(alignment: .leading) {
+                            Text("横スクロール速度：\(Int(tickerSpeed)) pt/秒")
+                            Slider(value: $tickerSpeed, in: 15...90, step: 5)
+                        }
+                        VStack(alignment: .leading) {
+                            Text("見出し文字サイズ：\(Int(tickerFontSize)) pt")
+                            Slider(value: $tickerFontSize, in: 14...28, step: 1)
+                        }
+                    } else {
+                        VStack(alignment: .leading) {
+                            Text("縦スクロール速度：\(Int(scrollSpeed)) pt/秒")
+                            Slider(value: $scrollSpeed, in: 4...60, step: 1)
+                        }
+                        VStack(alignment: .leading) {
+                            Text("本文文字サイズ：\(Int(fontSize)) pt")
+                            Slider(value: $fontSize, in: 14...30, step: 1)
+                        }
                     }
                     Text("画面下部の一時停止ボタンで、いつでも止められます。")
                         .font(.footnote).foregroundStyle(.secondary)

@@ -9,6 +9,10 @@ struct ContentView: View {
     @StateObject private var gaze = GazeTracker()
     @Environment(\.scenePhase) private var scenePhase
 
+    @AppStorage("news.displayMode") private var displayMode = "headlines"
+    @AppStorage("news.tickerLaneCount") private var tickerLaneCount = 6
+    @AppStorage("news.tickerSpeed") private var tickerSpeed = 42.0
+    @AppStorage("news.tickerFontSize") private var tickerFontSize = 19.0
     @AppStorage("news.scrollSpeed") private var scrollSpeed = 17.0
     @AppStorage("news.fontSize") private var fontSize = 20.0
     @AppStorage("news.preferencePercent") private var preferencePercent = 70
@@ -34,19 +38,21 @@ struct ContentView: View {
             VStack(spacing: 8) {
                 clockAndWeather
                     .padding(.horizontal, 22)
-                HStack(spacing: 8) {
-                    Image(systemName: "text.alignleft")
-                    Text("NEWS STREAM")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .tracking(2)
-                    Spacer()
-                    if news.loading { ProgressView().tint(.white) }
-                    Text("\(news.articles.count) 件")
-                        .font(.caption)
+                if displayMode == "fullText" {
+                    HStack(spacing: 8) {
+                        Image(systemName: "text.alignleft")
+                        Text("NEWS STREAM")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .tracking(2)
+                        Spacer()
+                        if news.loading { ProgressView().tint(.white) }
+                        Text("\(news.articles.count) 件")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.white.opacity(0.87))
+                    .padding(.horizontal, 24)
+                    .padding(.top, 6)
                 }
-                .foregroundStyle(.white.opacity(0.87))
-                .padding(.horizontal, 24)
-                .padding(.top, 6)
 
                 if gazeEnabled {
                     Label(gaze.status.label, systemImage: gaze.status.systemImage)
@@ -65,6 +71,23 @@ struct ContentView: View {
                             .font(.subheadline)
                     }
                     .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if displayMode == "headlines" {
+                    HeadlineTickerBoard(
+                        articles: ordered,
+                        laneCount: tickerLaneCount,
+                        speed: tickerSpeed,
+                        fontSize: tickerFontSize,
+                        paused: paused || (gazeEnabled && !gaze.scrollAllowed) || showSettings,
+                        openArticle: { article in
+                            paused = true
+                            UIApplication.shared.open(article.url)
+                        },
+                        vote: { article, liked in
+                            interests.vote(article, liked: liked)
+                            visibleArticleID = article.id
+                        }
+                    )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     NewsScrollView(
@@ -86,9 +109,15 @@ struct ContentView: View {
                         .foregroundStyle(.white.opacity(0.84))
                         .lineLimit(2).padding(.horizontal, 20)
                 }
-                controls
-                    .padding(.horizontal, 15)
-                    .padding(.bottom, 8)
+                if displayMode == "headlines" {
+                    tickerControls
+                        .padding(.horizontal, 25)
+                        .padding(.bottom, 12)
+                } else {
+                    controls
+                        .padding(.horizontal, 15)
+                        .padding(.bottom, 8)
+                }
             }
         }
         .onAppear {
@@ -106,22 +135,33 @@ struct ContentView: View {
         .onChange(of: gazeResumeDelay) { _, _ in configureGaze() }
         .onChange(of: scenePhase) { _, _ in configureGaze() }
         .onChange(of: showSettings) { _, _ in configureGaze() }
+        .onChange(of: displayMode) { _, mode in
+            if mode == "fullText" {
+                Task { await refreshFeeds() }
+            }
+        }
         .task {
-            await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies)
+            await refreshFeeds()
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 600_000_000_000)
                 guard !Task.isCancelled else { break }
-                await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies)
+                await refreshFeeds()
                 await weather.refresh()
             }
         }
         .sheet(isPresented: $showSettings, onDismiss: {
-            Task { await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies) }
+            Task { await refreshFeeds() }
         }) {
             SettingsView(sources: feeds, interest: interests) {
-                Task { await news.refresh(feeds.sources, fetchWebBodies: fetchWebBodies) }
+                Task { await refreshFeeds() }
             }
         }
+    }
+
+    private func refreshFeeds() async {
+        // Headline-only mode does not need to fetch or parse full article HTML.
+        await news.refresh(feeds.sources,
+                           fetchWebBodies: fetchWebBodies && displayMode == "fullText")
     }
 
     private func configureGaze() {
@@ -208,8 +248,56 @@ struct ContentView: View {
         .frame(width: 79)
     }
 
+    private var tickerControls: some View {
+        HStack(alignment: .center) {
+            Button { paused.toggle() } label: {
+                Image(systemName: paused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 21, weight: .semibold))
+                    .frame(width: 56, height: 56)
+                    .background(.white.opacity(0.16), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.52), lineWidth: 1))
+            }
+            .accessibilityLabel(paused ? "スクロール再開" : "スクロール一時停止")
+
+            Spacer()
+
+            Button { displayMode = "fullText" } label: {
+                VStack(spacing: 7) {
+                    HStack(spacing: 8) {
+                        Circle().fill(.white.opacity(0.95)).frame(width: 7, height: 7)
+                        Circle().fill(.white.opacity(0.35)).frame(width: 7, height: 7)
+                    }
+                    Text("全文へ切替")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .frame(minWidth: 78)
+                .padding(.vertical, 9)
+            }
+            .accessibilityLabel("全文モードに切り替える")
+
+            Spacer()
+
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 23, weight: .medium))
+                    .frame(width: 56, height: 56)
+                    .background(.white.opacity(0.16), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.52), lineWidth: 1))
+            }
+            .accessibilityLabel("設定")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+    }
+
     private var controls: some View {
         HStack(spacing: 9) {
+            Button { displayMode = "headlines" } label: {
+                Image(systemName: "text.line.first.and.arrowtriangle.forward")
+                    .frame(width: 29, height: 38)
+            }
+            .accessibilityLabel("見出しモードに切り替える")
+
             Button { paused.toggle() } label: {
                 Image(systemName: paused ? "play.fill" : "pause.fill")
                     .frame(width: 34, height: 38)

@@ -57,3 +57,22 @@ releases eagerly rendered up to 500 full-length panels, which could exhaust
 iPhone memory. The camera ARSession is created only when gaze control is
 explicitly turned on, and gaze updates are sampled at roughly 8Hz. HTML
 article extraction uses at most two concurrent requests to reduce peaks.
+
+## Headline marquee mode (v0.3.0)
+
+- Default view is a subtle glass ticker board that preserves the existing
+  cloud wallpaper, clock, weather and white AQI/UV gauges.
+- 2 to 6 independently animated rows show **RSS headlines only**, continuously
+  moving right to left in a lightweight UIKit view. No full article HTML is
+  downloaded in headline-only mode.
+- The lane category is derived from matching headline keywords; when a topic
+  is missing, a real populated category is split or repeated rather than
+  displaying unrelated articles under a false heading.
+- Tap a moving title to pause and open the publisher's original URL. Long
+  press a title to vote "interesting" or "not interesting" using the existing
+  on-device preference model. The old vertically scrolling full-text mode
+  remains available via the bottom mode switch or settings.
+- Default: 6 lanes, 42 points/sec, 19-point white text, restrained pastel
+  accents on semitransparent charcoal strips.
+- The gaze-controlled pause applies to either mode, and the publisher link
+  remains the sole route to accessing article HTML from a headline.
