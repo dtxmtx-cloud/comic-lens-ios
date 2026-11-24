@@ -24,8 +24,8 @@ targets:
       path: SkyNews/Info.plist
       properties:
         CFBundleDisplayName: "空模様ニュース"
-        CFBundleShortVersionString: "0.3.2"
-        CFBundleVersion: "6"
+        CFBundleShortVersionString: "0.3.3"
+        CFBundleVersion: "7"
         NSLocationWhenInUseUsageDescription: "現在地の天気、気温、空気質を表示するため位置情報を使用します。"
         NSCameraUsageDescription: "画面を見ているときだけニュースをスクロールするため、フロントカメラで視線を推定します。カメラ画像や顔データは保存しません。"
         UIStatusBarStyle: UIStatusBarStyleLightContent
@@ -36,7 +36,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.dtxmtx.skynewsflow
-        MARKETING_VERSION: "0.3.2"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "0.3.3"
+        CURRENT_PROJECT_VERSION: "7"
         CODE_SIGN_STYLE: Automatic
         SUPPORTS_MACCATALYST: "NO"

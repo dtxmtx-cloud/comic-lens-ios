@@ -82,9 +82,15 @@ struct HeadlineTickerBoard: View {
 
     private var lanes: [HeadlineLaneData] {
         let count = max(2, min(6, laneCount))
+        // Classify each headline only once. The former nested filters
+        // classified every headline seven times per parent UI update.
+        var buckets: [HeadlineTopic: [NewsArticle]] = [:]
+        for article in articles {
+            buckets[HeadlineTopic.classify(article.title), default: []].append(article)
+        }
         var groups = HeadlineTopic.allCases.compactMap { topic -> (HeadlineTopic, [NewsArticle])? in
-            let items = articles.filter { HeadlineTopic.classify($0.title) == topic }
-            return items.isEmpty ? nil : (topic, items)
+            guard let items = buckets[topic], !items.isEmpty else { return nil }
+            return (topic, items)
         }
         // Split populated buckets if the sources cover fewer than N topics;
         // keep each category honest and each lane supplied with real headlines.
@@ -217,7 +223,6 @@ private final class HeadlineMarqueeUIView: UIView, UIContextMenuInteractionDeleg
     private var lastSize = CGSize.zero
     private let gap: CGFloat = 18
     private var lastTimestamp: CFTimeInterval?
-    private var displayLink: CADisplayLink?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -238,24 +243,21 @@ private final class HeadlineMarqueeUIView: UIView, UIContextMenuInteractionDeleg
         super.init(coder: coder)
     }
 
-    // The display link retains its target. Explicitly invalidating on detach
-    // is essential to avoid a permanent view + CADisplayLink retain cycle.
+    // One shared clock drives every visible lane. Six separate CADisplayLinks
+    // previously woke the main thread six times on each display interval.
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil {
-            displayLink?.invalidate()
-            displayLink = nil
+            HeadlineTickerClock.shared.detach(self)
             lastTimestamp = nil
-        } else if displayLink == nil {
-            let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
-            link.preferredFramesPerSecond = 12
-            link.add(to: .main, forMode: .common)
-            displayLink = link
+        } else {
+            lastTimestamp = nil
+            HeadlineTickerClock.shared.attach(self)
         }
     }
 
     deinit {
-        displayLink?.invalidate()
+        // The shared ticker stores only weak references to attached views.
     }
 
     func setArticles(_ updated: [NewsArticle], fontSize size: CGFloat) {
@@ -302,12 +304,12 @@ private final class HeadlineMarqueeUIView: UIView, UIContextMenuInteractionDeleg
         return min(1800, max(140, textWidth + 8))
     }
 
-    @objc private func tick(_ link: CADisplayLink) {
-        defer { lastTimestamp = link.timestamp }
+    func advance(timestamp: CFTimeInterval) {
+        defer { lastTimestamp = timestamp }
         guard let previous = lastTimestamp, window != nil, !isPaused,
               !articles.isEmpty, bounds.width > 0 else { return }
 
-        let travel = max(0, speed) * CGFloat(min(0.12, max(0, link.timestamp - previous)))
+        let travel = max(0, speed) * CGFloat(min(0.12, max(0, timestamp - previous)))
         guard travel > 0 else { return }
 
         first.frame.origin.x -= travel
@@ -349,6 +351,50 @@ private final class HeadlineMarqueeUIView: UIView, UIContextMenuInteractionDeleg
                 self?.onVote?(article, false)
             }
             return UIMenu(children: [read, like, dislike])
+        }
+    }
+}
+
+/// A single 12fps display link for all news ticker lanes.
+/// Weak references prevent hidden/offscreen views from being retained.
+private final class HeadlineTickerClock: NSObject {
+    static let shared = HeadlineTickerClock()
+
+    private struct WeakLane {
+        weak var view: HeadlineMarqueeUIView?
+    }
+
+    private var lanes: [ObjectIdentifier: WeakLane] = [:]
+    private var link: CADisplayLink?
+
+    func attach(_ view: HeadlineMarqueeUIView) {
+        lanes[ObjectIdentifier(view)] = WeakLane(view: view)
+        if link == nil {
+            let displayLink = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            displayLink.preferredFramesPerSecond = 12
+            displayLink.add(to: .main, forMode: .common)
+            link = displayLink
+        }
+    }
+
+    func detach(_ view: HeadlineMarqueeUIView) {
+        lanes.removeValue(forKey: ObjectIdentifier(view))
+        lanes = lanes.filter { $0.value.view != nil }
+        if lanes.isEmpty {
+            link?.invalidate()
+            link = nil
+        }
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        lanes = lanes.filter { $0.value.view != nil }
+        if lanes.isEmpty {
+            link.invalidate()
+            self.link = nil
+            return
+        }
+        for lane in lanes.values {
+            lane.view?.advance(timestamp: link.timestamp)
         }
     }
 }

@@ -29,7 +29,7 @@ final class ContinuouslyScrollingNews: UIScrollView {
     private var currentSignature = ""
     // A fixed-size rolling window prevents hundreds of full-body UILabels
     // from exhausting memory when publisher articles are long.
-    private let windowCount = 4
+    private let windowCount = 3
     private var sourceArticles: [NewsArticle] = []
     private var nextArticleIndex = 0
     private var rows: [(String, UIView)] = []

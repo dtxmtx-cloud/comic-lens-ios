@@ -88,7 +88,7 @@ struct SettingsView: View {
                     .disabled(!gazeEnabled)
                     Text("視線はARKitによる推定です。初回にカメラの使用許可が必要です。非対応機種・権限なし・カメラエラー時は通常スクロールします。手動の一時停止は常に優先されます。")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("カメラ画像や顔・視線データを記録・送信しません。アプリの表示中だけカメラを使用します。")
+                    Text("視線連動はフロントカメラの継続使用で負荷が増えるため、動作が重い場合はオフにしてください。カメラ画像や顔・視線データを記録・送信しません。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 

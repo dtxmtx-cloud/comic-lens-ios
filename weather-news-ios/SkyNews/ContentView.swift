@@ -24,8 +24,14 @@ struct ContentView: View {
     @State private var paused = false
     @State private var visibleArticleID: String?
 
-    private var ordered: [NewsArticle] {
-        interests.rank(news.articles, preferredPercent: preferencePercent)
+    // Compute preference ranking on actual feed/preference changes only.
+    // Previously this ran during every unrelated SwiftUI invalidation,
+    // including the clock, weather, gaze and scrolling state.
+    @State private var ordered: [NewsArticle] = []
+
+    private func updateRanking(_ incoming: [NewsArticle]? = nil) {
+        let input = incoming ?? news.articles
+        ordered = interests.rank(input, preferredPercent: preferencePercent)
     }
 
     private var selected: NewsArticle? {
@@ -126,6 +132,16 @@ struct ContentView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             weather.start()
             configureGaze()
+            updateRanking()
+        }
+        .onReceive(news.$articles) { incoming in
+            updateRanking(incoming)
+        }
+        .onChange(of: interests.weights) { _, _ in
+            updateRanking()
+        }
+        .onChange(of: preferencePercent) { _, _ in
+            updateRanking()
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
@@ -182,7 +198,7 @@ struct ContentView: View {
 
     private var clockAndWeather: some View {
         VStack(spacing: 0) {
-            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            TimelineView(.periodic(from: .now, by: 30)) { timeline in
                 let now = timeline.date
                 VStack(spacing: 0) {
                     HStack(spacing: 7) {

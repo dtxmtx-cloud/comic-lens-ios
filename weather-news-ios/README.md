@@ -107,3 +107,24 @@ article extraction uses at most two concurrent requests to reduce peaks.
 This is a performance fix based on code inspection. Actual iPhone crash logs
 and device memory traces have not been obtained, so device-specific crash
 resolution must be verified on real hardware.
+
+
+## Main-thread CPU reduction (v0.3.3)
+
+- Ranking was the remaining hot spot: the comparator repeatedly invoked
+  NaturalLanguage tokenization thousands of times. Tokenization is now once
+  per article per refresh, numeric scores are reused by both sort passes,
+  and published ranking results are stored in view state. Unrelated clock,
+  weather, user-interface and pause updates do not trigger re-ranking.
+- Headline categorization now runs once per article instead of seven times.
+- All six headline lanes share a single 12 fps CADisplayLink with weak
+  references; previous builds had six independently ticking display links.
+- News text scrolling keeps three instead of four full-body panels alive.
+- The clock refreshes every 30 seconds rather than every second (HH:mm is
+  the visible resolution), and a like/dislike vote emits one new weight
+  dictionary rather than one publication per term.
+- Gaze tracking is still an explicit opt-in; continuous camera tracking
+  consumes power on all supported iPhone models.
+
+This remains a code-level performance fix: a macOS simulator cannot
+reproduce every thermal or memory condition of an iPhone.
