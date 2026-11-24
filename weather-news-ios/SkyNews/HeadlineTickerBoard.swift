@@ -197,125 +197,132 @@ private final class HeadlineButton: UIButton {
     var article: NewsArticle?
 }
 
-/// Reuses only two short ticker strips (a rolling row of titles) instead of
-/// rendering all feed articles or allocating a huge Core Animation animation.
+/// One small, reusable pair of headline buttons per lane. Previous builds
+/// generated up to 48 buttons per lane, each with a context menu interaction,
+/// then moved two enormous subview trees 30 times per second.
+///
+/// With this implementation six lanes = 12 buttons, at 12 frames per second.
 private final class HeadlineMarqueeUIView: UIView, UIContextMenuInteractionDelegate {
-    var speed: CGFloat = 45
+    var speed: CGFloat = 42
     var isPaused = false
     var onOpen: ((NewsArticle) -> Void)?
     var onVote: ((NewsArticle, Bool) -> Void)?
 
-    private let first = UIView()
-    private let second = UIView()
+    private let first = HeadlineButton(type: .custom)
+    private let second = HeadlineButton(type: .custom)
     private var articles: [NewsArticle] = []
-    private var fontSize: CGFloat = 20
+    private var nextIndex = 0
+    private var fontSize: CGFloat = 19
     private var signature = ""
-    private var builtWidth: CGFloat = 0
-    private var builtHeight: CGFloat = 0
-    private var cycleWidth: CGFloat = 0
-    private var position: CGFloat = 0
+    private var lastSize = CGSize.zero
+    private let gap: CGFloat = 18
     private var lastTimestamp: CFTimeInterval?
     private var displayLink: CADisplayLink?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
-        first.isUserInteractionEnabled = true
-        second.isUserInteractionEnabled = true
-        addSubview(first)
-        addSubview(second)
-        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
-        link.preferredFramesPerSecond = 30
-        link.add(to: .main, forMode: .common)
-        displayLink = link
+        backgroundColor = .clear
+        for button in [first, second] {
+            button.setTitleColor(UIColor.white.withAlphaComponent(0.97), for: .normal)
+            button.titleLabel?.lineBreakMode = .byClipping
+            button.titleLabel?.numberOfLines = 1
+            button.contentHorizontalAlignment = .left
+            button.addTarget(self, action: #selector(openHeadline(_:)), for: .touchUpInside)
+            button.addInteraction(UIContextMenuInteraction(delegate: self))
+            addSubview(button)
+        }
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
     }
 
-    deinit { displayLink?.invalidate() }
+    // The display link retains its target. Explicitly invalidating on detach
+    // is essential to avoid a permanent view + CADisplayLink retain cycle.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            displayLink?.invalidate()
+            displayLink = nil
+            lastTimestamp = nil
+        } else if displayLink == nil {
+            let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            link.preferredFramesPerSecond = 12
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
+    }
 
-    func setArticles(_ value: [NewsArticle], fontSize: CGFloat) {
-        let newSignature = value.map { $0.id + ":" + $0.title }.joined(separator: "\n")
-            + "|" + String(describing: fontSize)
-        guard signature != newSignature else { return }
+    deinit {
+        displayLink?.invalidate()
+    }
+
+    func setArticles(_ updated: [NewsArticle], fontSize size: CGFloat) {
+        // Titles are short, so comparing this signature is inexpensive.
+        let newSignature = updated.map { $0.id + "|" + $0.title }.joined(separator: "\n")
+            + "|" + String(describing: size)
+        guard newSignature != signature else { return }
         signature = newSignature
-        articles = value
-        self.fontSize = fontSize
-        builtWidth = 0
-        builtHeight = 0
-        position = 0
+        articles = updated
+        fontSize = size
+        nextIndex = 0
+        lastSize = .zero
         setNeedsLayout()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard bounds.width > 0 && bounds.height > 0 else { return }
-        if builtWidth != bounds.width || builtHeight != bounds.height {
-            rebuild()
-        }
-        moveStrips()
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        guard bounds.size != lastSize else { return }
+        lastSize = bounds.size
+        nextIndex = 0
+        let w1 = loadNext(into: first)
+        let w2 = loadNext(into: second)
+        first.frame = CGRect(x: 0, y: 0, width: w1, height: bounds.height)
+        second.frame = CGRect(x: w1 + gap, y: 0, width: w2, height: bounds.height)
     }
 
-    private func rebuild() {
-        builtWidth = bounds.width
-        builtHeight = bounds.height
-        for strip in [first, second] {
-            strip.subviews.forEach { $0.removeFromSuperview() }
+    @discardableResult
+    private func loadNext(into button: HeadlineButton) -> CGFloat {
+        guard !articles.isEmpty else {
+            button.article = nil
+            button.setTitle(nil, for: .normal)
+            return 0
         }
-        guard !articles.isEmpty else { cycleWidth = 0; return }
-
-        // A modest track repeats a handful of titles; wider screens still
-        // always have text to display, even when the RSS feed contains one item.
-        let targetWidth = max(bounds.width * 1.5, 950)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: fontSize, weight: .medium)
-        ]
-        var x: CGFloat = 0
-        var index = 0
-        while x < targetWidth && index < 24 {
-            let article = articles[index % articles.count]
-            let caption = article.title + "     ·     "
-            let width = max(90, ceil((caption as NSString).size(withAttributes: attrs).width) + 8)
-            for strip in [first, second] {
-                let button = HeadlineButton(type: .custom)
-                button.article = article
-                button.setTitle(caption, for: .normal)
-                button.setTitleColor(.white.withAlphaComponent(0.97), for: .normal)
-                button.titleLabel?.font = .systemFont(ofSize: fontSize, weight: .medium)
-                button.titleLabel?.lineBreakMode = .byClipping
-                button.contentHorizontalAlignment = .left
-                button.frame = CGRect(x: x, y: 0, width: width, height: bounds.height)
-                button.accessibilityLabel = article.title + "、" + article.source
-                button.addTarget(self, action: #selector(openHeadline(_:)), for: .touchUpInside)
-                button.addInteraction(UIContextMenuInteraction(delegate: self))
-                strip.addSubview(button)
-            }
-            x += width
-            index += 1
-        }
-        cycleWidth = max(1, x)
-        first.frame = CGRect(x: 0, y: 0, width: cycleWidth, height: bounds.height)
-        second.frame = CGRect(x: cycleWidth, y: 0, width: cycleWidth, height: bounds.height)
-        position = 0
-    }
-
-    private func moveStrips() {
-        guard cycleWidth > 0 else { return }
-        first.frame.origin.x = -position
-        second.frame.origin.x = cycleWidth - position
+        let article = articles[nextIndex % articles.count]
+        nextIndex = (nextIndex + 1) % articles.count
+        button.article = article
+        let title = String(article.title.prefix(160)) + "    ·    "
+        button.setTitle(title, for: .normal)
+        let font = UIFont.systemFont(ofSize: fontSize, weight: .medium)
+        button.titleLabel?.font = font
+        button.accessibilityLabel = article.title + "、" + article.source
+        let textWidth = ceil((title as NSString).size(withAttributes: [.font: font]).width)
+        return min(1800, max(140, textWidth + 8))
     }
 
     @objc private func tick(_ link: CADisplayLink) {
         defer { lastTimestamp = link.timestamp }
-        guard let before = lastTimestamp, window != nil, !isPaused, cycleWidth > 0 else { return }
-        let delta = CGFloat(min(0.1, max(0, link.timestamp - before)))
-        position += max(0, speed) * delta
-        if position >= cycleWidth {
-            position.formTruncatingRemainder(dividingBy: cycleWidth)
+        guard let previous = lastTimestamp, window != nil, !isPaused,
+              !articles.isEmpty, bounds.width > 0 else { return }
+
+        let travel = max(0, speed) * CGFloat(min(0.12, max(0, link.timestamp - previous)))
+        guard travel > 0 else { return }
+
+        first.frame.origin.x -= travel
+        second.frame.origin.x -= travel
+
+        if first.frame.maxX < 0 {
+            let nextX = second.frame.maxX + gap
+            let nextWidth = loadNext(into: first)
+            first.frame = CGRect(x: nextX, y: 0, width: nextWidth, height: bounds.height)
         }
-        moveStrips()
+        if second.frame.maxX < 0 {
+            let nextX = first.frame.maxX + gap
+            let nextWidth = loadNext(into: second)
+            second.frame = CGRect(x: nextX, y: 0, width: nextWidth, height: bounds.height)
+        }
     }
 
     @objc private func openHeadline(_ sender: HeadlineButton) {
@@ -323,17 +330,22 @@ private final class HeadlineMarqueeUIView: UIView, UIContextMenuInteractionDeleg
         onOpen?(article)
     }
 
-    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
-                                configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+    func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        configurationForMenuAtLocation location: CGPoint
+    ) -> UIContextMenuConfiguration? {
         guard let article = (interaction.view as? HeadlineButton)?.article else { return nil }
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-            let read = UIAction(title: "元記事を開く", image: UIImage(systemName: "arrow.up.right.square")) { _ in
+            let read = UIAction(title: "元記事を開く",
+                                image: UIImage(systemName: "arrow.up.right.square")) { _ in
                 self?.onOpen?(article)
             }
-            let like = UIAction(title: "興味あり", image: UIImage(systemName: "hand.thumbsup")) { _ in
+            let like = UIAction(title: "興味あり",
+                                image: UIImage(systemName: "hand.thumbsup")) { _ in
                 self?.onVote?(article, true)
             }
-            let dislike = UIAction(title: "興味なし", image: UIImage(systemName: "hand.thumbsdown")) { _ in
+            let dislike = UIAction(title: "興味なし",
+                                   image: UIImage(systemName: "hand.thumbsdown")) { _ in
                 self?.onVote?(article, false)
             }
             return UIMenu(children: [read, like, dislike])

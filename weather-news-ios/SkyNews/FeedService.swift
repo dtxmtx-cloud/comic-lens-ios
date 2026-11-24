@@ -131,9 +131,16 @@ final class NewsStore: ObservableObject {
     private var webFetchAttempts: [String: Date] = [:]
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: "feed.cached"),
-           let cached = try? JSONDecoder().decode([NewsArticle].self, from: data) {
-            articles = cached
+        if let data = UserDefaults.standard.data(forKey: "feed.cached") {
+            // Migrate old versions that cached hundreds of full publisher
+            // articles in UserDefaults. Do not deserialize enormous archives.
+            guard data.count <= 1_800_000 else {
+                UserDefaults.standard.removeObject(forKey: "feed.cached")
+                return
+            }
+            if let cached = try? JSONDecoder().decode([NewsArticle].self, from: data) {
+                articles = Array(cached.prefix(90))
+            }
         }
     }
 
@@ -170,14 +177,14 @@ final class NewsStore: ObservableObject {
             let oldWebBodies = Dictionary(
                 uniqueKeysWithValues: articles.filter { $0.textSource == "web" }.map { ($0.id, $0) }
             )
-            articles = Array(sorted.prefix(250)).map { item in
+            articles = Array(sorted.prefix(120)).map { item in
                 guard let cached = oldWebBodies[item.id],
                       cached.body.count > item.body.count else { return item }
                 return cached
             }
             message = nil
             persist()
-            if fetchWebBodies { await enrichFromWeb(maxPages: 24) }
+            if fetchWebBodies { await enrichFromWeb(maxPages: 8) }
         } else {
             message = articles.isEmpty
                 ? "記事を取得できませんでした。通信状況とRSSのURLを確認してください。"
@@ -249,7 +256,17 @@ final class NewsStore: ObservableObject {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(articles) {
+        // UserDefaults is not a database for full-length web articles.
+        // Keeping a bounded excerpt also prevents a large startup allocation.
+        let compact = articles.prefix(90).map { item -> NewsArticle in
+            var stored = item
+            if stored.body.count > 2_000 {
+                stored.body = String(stored.body.prefix(2_000))
+                stored.textSource = "rssExcerpt"
+            }
+            return stored
+        }
+        if let data = try? JSONEncoder().encode(compact), data.count <= 1_800_000 {
             UserDefaults.standard.set(data, forKey: "feed.cached")
         }
     }

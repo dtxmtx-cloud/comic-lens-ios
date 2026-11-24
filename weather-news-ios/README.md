@@ -87,3 +87,23 @@ article extraction uses at most two concurrent requests to reduce peaks.
 - Updated roughly every ten minutes and when returning to the app.
 - When location is denied, the weather fallback is explicitly labeled Tokyo.
   Network failures retain the last successfully received condition.
+
+
+## Performance and crash mitigation (v0.3.2)
+
+- Weather sky is rendered only when the conditions or view size change,
+  to a single opaque low-resolution bitmap. It no longer draws more than
+  a hundred animated/blurred/transparent SwiftUI layers.
+- Each headline lane keeps only two recycled UIButton instances (12 buttons
+  total across 6 lanes) instead of dozens per lane. CADisplayLink updates at
+  12 fps, and the display link is invalidated as soon as the view disappears.
+- Full-text scroll view also invalidates its CADisplayLink when detached to
+  avoid a permanent UIKit display-link retain cycle.
+- Feed cache is bounded to 90 articles and 2000 characters each, discarding
+  oversized legacy caches on upgrade to prevent OOM during launch.
+- At most 120 articles are loaded per refresh; web-text enrichment is bounded
+  to 8 pages. Existing RSS/title selection and user preference features remain.
+
+This is a performance fix based on code inspection. Actual iPhone crash logs
+and device memory traces have not been obtained, so device-specific crash
+resolution must be verified on real hardware.

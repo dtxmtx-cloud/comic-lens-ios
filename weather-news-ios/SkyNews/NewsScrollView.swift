@@ -58,13 +58,24 @@ final class ContinuouslyScrollingNews: UIScrollView {
             column.bottomAnchor.constraint(equalTo: contentLayoutGuide.bottomAnchor, constant: -8),
             column.widthAnchor.constraint(equalTo: frameLayoutGuide.widthAnchor, constant: -24)
         ])
-        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            displayLink?.invalidate()
+            displayLink = nil
+            lastTimestamp = nil
+        } else if displayLink == nil {
+            let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            link.preferredFramesPerSecond = 20
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
     }
 
     deinit { displayLink?.invalidate() }

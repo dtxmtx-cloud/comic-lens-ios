@@ -1,18 +1,72 @@
 import SwiftUI
+import UIKit
 
-/// A static sky that derives its palette, cloud density and weather details
-/// exclusively from the latest Open-Meteo current-weather snapshot.
-///
-/// No animated background, camera feed, remote wallpaper, or rotating pictures.
-/// Changing the weather snapshot automatically changes the wallpaper.
-struct SkyView: View {
+// Low-memory weather wallpaper. Weather is rasterized into ONE static image
+// when the weather classification or screen size changes, not every frame.
+// The previous SwiftUI version created dozens of blurred shapes at once.
+struct SkyView: UIViewRepresentable {
     let weather: WeatherSnapshot
 
-    private enum SkyCondition: Equatable {
+    func makeUIView(context: Context) -> StaticWeatherSky {
+        StaticWeatherSky()
+    }
+
+    func updateUIView(_ view: StaticWeatherSky, context: Context) {
+        view.setWeather(weather)
+    }
+}
+
+final class StaticWeatherSky: UIView {
+    private enum Condition: Int {
         case clear, partlyCloudy, overcast, fog, rain, snow, thunder
     }
 
-    private var condition: SkyCondition {
+    private var weather = WeatherSnapshot()
+    private var signature = ""
+    private var drawnSignature = ""
+    private var drawnSize = CGSize.zero
+    private let imageView = UIImageView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = UIColor(red: 0.61, green: 0.71, blue: 0.81, alpha: 1)
+        imageView.contentMode = .scaleToFill
+        imageView.isUserInteractionEnabled = false
+        addSubview(imageView)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    func setWeather(_ snapshot: WeatherSnapshot) {
+        let next = [
+            String(snapshot.weatherCode),
+            snapshot.isDay ? "1" : "0",
+            String((snapshot.cloudCover ?? -1) / 10),
+            String(Int((snapshot.precipitation ?? 0) * 2)),
+            String(Int((snapshot.snowfallAmount ?? 0) * 2)),
+            String(snapshot.localHour ?? -1)
+        ].joined(separator: ":")
+        guard next != signature else { return }
+        signature = next
+        weather = snapshot
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        imageView.frame = bounds
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let size = bounds.size
+        guard drawnSignature != signature || drawnSize != size else { return }
+        drawnSignature = signature
+        drawnSize = size
+        imageView.image = drawWallpaper(size: size)
+    }
+
+    private var condition: Condition {
         switch weather.weatherCode {
         case 95...99: return .thunder
         case 71...77, 85, 86: return .snow
@@ -21,281 +75,194 @@ struct SkyView: View {
         case 3: return .overcast
         case 2: return .partlyCloudy
         default:
-            let cloud = weather.cloudCover ?? 0
-            return cloud > 80 ? .overcast : (cloud > 25 ? .partlyCloudy : .clear)
+            let cover = weather.cloudCover ?? 0
+            if cover > 80 { return .overcast }
+            if cover > 25 { return .partlyCloudy }
+            return .clear
         }
     }
 
-    private var cloudiness: Double {
-        let fromAPI = Double(weather.cloudCover ?? -1) / 100.0
-        if fromAPI >= 0 { return min(1, max(0, fromAPI)) }
+    private var cloudCover: CGFloat {
+        if let reported = weather.cloudCover {
+            return CGFloat(min(100, max(0, reported))) / 100
+        }
         switch condition {
-        case .clear: return 0.07
+        case .clear: return 0.08
         case .partlyCloudy: return 0.45
-        case .overcast, .fog, .rain, .snow, .thunder: return 0.92
+        default: return 0.90
         }
     }
 
-    private var nearSunset: Bool {
+    private var dusk: Bool {
         guard weather.isDay, let hour = weather.localHour else { return false }
         return (5...7).contains(hour) || (16...18).contains(hour)
     }
 
-    var body: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            ZStack {
-                LinearGradient(colors: skyPalette, startPoint: .top, endPoint: .bottom)
-
-                if weather.isDay {
-                    daylight(at: size)
-                } else {
-                    nightlight(at: size)
-                }
-
-                // Long, semi-transparent clouds create a cloudy-photograph-like
-                // impression without replacing the user's restrained design.
-                clouds(in: size)
-
-                if condition == .fog {
-                    haze(in: size)
-                }
-
-                if condition == .rain || condition == .thunder {
-                    rainfall(in: size)
-                }
-                if condition == .snow {
-                    snowfall(in: size)
-                }
-                // Dim the lower half slightly so white text and glass ticker
-                // lanes remain readable for every weather and light condition.
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .black.opacity(weather.isDay ? 0.06 : 0.04), location: 0.40),
-                        .init(color: .black.opacity(weather.isDay ? 0.18 : 0.23), location: 1)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            .frame(width: size.width, height: size.height)
-            .clipped()
-        }
-        .ignoresSafeArea()
-        .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private func daylight(at size: CGSize) -> some View {
-        if condition != .thunder {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.white.opacity(nearSunset ? 0.48 : (cloudiness > 0.75 ? 0.23 : 0.63)),
-                            Color.white.opacity(cloudiness > 0.75 ? 0.09 : 0.23),
-                            Color.white.opacity(0)
-                        ],
-                        center: .center,
-                        startRadius: 5,
-                        endRadius: 235
-                    )
-                )
-                .frame(width: 470, height: 470)
-                .position(
-                    x: size.width * 0.74,
-                    y: size.height * (nearSunset ? 0.48 : 0.18)
-                )
-        }
-    }
-
-    private func nightlight(at size: CGSize) -> some View {
-        ZStack {
-            if cloudiness < 0.7 {
-                ForEach(0..<25, id: \.self) { i in
-                    Circle()
-                        .fill(Color.white.opacity(Double((i * 7) % 5 + 2) / 15))
-                        .frame(width: i % 6 == 0 ? 2.4 : 1.2,
-                               height: i % 6 == 0 ? 2.4 : 1.2)
-                        .position(
-                            x: size.width * CGFloat(Double((i * 67 + 17) % 101) / 101),
-                            y: size.height * CGFloat(Double((i * 29 + 11) % 64) / 100)
-                        )
-                }
-                Circle()
-                    .fill(Color.white.opacity(0.65))
-                    .frame(width: 43, height: 43)
-                    .blur(radius: 2)
-                    .position(x: size.width * 0.80, y: size.height * 0.19)
-            }
-        }
-    }
-
-    private func clouds(in size: CGSize) -> some View {
-        let density = cloudiness
-        let count = max(3, Int(5 + density * 13))
-        let alpha: Double = weather.isDay ? 0.10 + density * 0.26 : 0.06 + density * 0.13
-        return ZStack {
-            ForEach(0..<count, id: \.self) { i in
-                let width = size.width * CGFloat(0.72 + Double(i % 5) * 0.13)
-                let y = size.height * CGFloat(Double((i * 29 + 9) % 93) / 100)
-                CloudSilhouette()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(alpha * Double(i % 3 + 1) / 3),
-                                Color.white.opacity(alpha),
-                                Color(red: 0.44, green: 0.55, blue: 0.68)
-                                    .opacity(alpha * 0.55)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: width, height: CGFloat(78 + i % 4 * 36))
-                    .blur(radius: CGFloat(17 + (i % 5) * 8))
-                    .position(
-                        x: size.width * CGFloat(Double((i * 37 + 13) % 115) / 100),
-                        y: y
-                    )
-            }
-            if density > 0.72 {
-                // Overcast layers are broad and diffuse, not solid gray bars.
-                Ellipse()
-                    .fill(.white.opacity(weather.isDay ? 0.19 : 0.07))
-                    .frame(width: size.width * 1.8, height: size.height * 0.20)
-                    .blur(radius: 70)
-                    .position(x: size.width * 0.48, y: size.height * 0.28)
-            }
-        }
-    }
-
-    private func haze(in size: CGSize) -> some View {
-        ZStack {
-            ForEach(0..<5, id: \.self) { i in
-                Ellipse()
-                    .fill(.white.opacity(weather.isDay ? 0.18 : 0.07))
-                    .frame(width: size.width * 1.55, height: 135)
-                    .blur(radius: 55)
-                    .position(x: size.width * 0.5,
-                              y: size.height * (0.19 + Double(i) * 0.17))
-            }
-        }
-    }
-
-    private func rainfall(in size: CGSize) -> some View {
-        let intense = weather.precipitation ?? 0
-        let count = intense > 1.0 ? 70 : 37
-        return ZStack {
-            ForEach(0..<count, id: \.self) { i in
-                Capsule()
-                    .fill(Color.white.opacity(weather.isDay ? 0.13 : 0.21))
-                    .frame(width: 1.1, height: CGFloat(10 + (i % 4) * 5))
-                    .rotationEffect(.degrees(-12))
-                    .position(
-                        x: size.width * CGFloat(Double((i * 73 + 19) % 103) / 103),
-                        y: size.height * CGFloat(Double((i * 47 + 5) % 101) / 101)
-                    )
-            }
-        }
-    }
-
-    private func snowfall(in size: CGSize) -> some View {
-        ZStack {
-            ForEach(0..<65, id: \.self) { i in
-                Circle()
-                    .fill(.white.opacity(weather.isDay ? 0.49 : 0.67))
-                    .frame(width: CGFloat(2 + i % 3), height: CGFloat(2 + i % 3))
-                    .blur(radius: i % 6 == 0 ? 1 : 0)
-                    .position(
-                        x: size.width * CGFloat(Double((i * 71 + 15) % 103) / 103),
-                        y: size.height * CGFloat(Double((i * 37 + 19) % 101) / 101)
-                    )
-            }
-        }
-    }
-
-    private var skyPalette: [Color] {
+    private var colors: [UIColor] {
         if !weather.isDay {
-            switch condition {
-            case .thunder: return [
-                Color(red: 0.07, green: 0.09, blue: 0.18),
-                Color(red: 0.15, green: 0.17, blue: 0.28),
-                Color(red: 0.20, green: 0.22, blue: 0.34)
-            ]
-            case .rain, .snow, .fog, .overcast: return [
-                Color(red: 0.10, green: 0.15, blue: 0.26),
-                Color(red: 0.22, green: 0.30, blue: 0.42),
-                Color(red: 0.29, green: 0.36, blue: 0.48)
-            ]
-            default: return [
-                Color(red: 0.07, green: 0.15, blue: 0.31),
-                Color(red: 0.17, green: 0.28, blue: 0.44),
-                Color(red: 0.28, green: 0.34, blue: 0.47)
-            ]
+            if condition == .thunder {
+                return [
+                    UIColor(red: 0.08, green: 0.11, blue: 0.22, alpha: 1),
+                    UIColor(red: 0.16, green: 0.21, blue: 0.33, alpha: 1),
+                    UIColor(red: 0.23, green: 0.29, blue: 0.39, alpha: 1)
+                ]
             }
+            return [
+                UIColor(red: 0.10, green: 0.17, blue: 0.30, alpha: 1),
+                UIColor(red: 0.23, green: 0.32, blue: 0.44, alpha: 1),
+                UIColor(red: 0.32, green: 0.40, blue: 0.50, alpha: 1)
+            ]
         }
         switch condition {
         case .clear:
-            return nearSunset ? [
-                Color(red: 0.42, green: 0.61, blue: 0.82),
-                Color(red: 0.65, green: 0.71, blue: 0.83),
-                Color(red: 0.82, green: 0.72, blue: 0.68)
-            ] : [
-                Color(red: 0.42, green: 0.68, blue: 0.90),
-                Color(red: 0.59, green: 0.76, blue: 0.90),
-                Color(red: 0.75, green: 0.84, blue: 0.91)
-            ]
+            return dusk
+                ? [UIColor(red: 0.49, green: 0.65, blue: 0.83, alpha: 1),
+                   UIColor(red: 0.70, green: 0.77, blue: 0.87, alpha: 1),
+                   UIColor(red: 0.77, green: 0.72, blue: 0.72, alpha: 1)]
+                : [UIColor(red: 0.47, green: 0.68, blue: 0.87, alpha: 1),
+                   UIColor(red: 0.66, green: 0.79, blue: 0.90, alpha: 1),
+                   UIColor(red: 0.72, green: 0.82, blue: 0.90, alpha: 1)]
         case .partlyCloudy:
-            return [
-                Color(red: 0.54, green: 0.71, blue: 0.87),
-                Color(red: 0.65, green: 0.76, blue: 0.86),
-                Color(red: 0.66, green: 0.74, blue: 0.83)
-            ]
+            return [UIColor(red: 0.53, green: 0.68, blue: 0.84, alpha: 1),
+                    UIColor(red: 0.63, green: 0.74, blue: 0.85, alpha: 1),
+                    UIColor(red: 0.65, green: 0.74, blue: 0.84, alpha: 1)]
         case .overcast:
-            return [
-                Color(red: 0.54, green: 0.64, blue: 0.75),
-                Color(red: 0.63, green: 0.71, blue: 0.81),
-                Color(red: 0.59, green: 0.67, blue: 0.78)
-            ]
+            return [UIColor(red: 0.57, green: 0.67, blue: 0.77, alpha: 1),
+                    UIColor(red: 0.64, green: 0.73, blue: 0.81, alpha: 1),
+                    UIColor(red: 0.59, green: 0.68, blue: 0.77, alpha: 1)]
         case .fog:
-            return [
-                Color(red: 0.62, green: 0.69, blue: 0.76),
-                Color(red: 0.72, green: 0.76, blue: 0.82),
-                Color(red: 0.67, green: 0.73, blue: 0.79)
-            ]
+            return [UIColor(red: 0.65, green: 0.72, blue: 0.79, alpha: 1),
+                    UIColor(red: 0.73, green: 0.79, blue: 0.84, alpha: 1),
+                    UIColor(red: 0.69, green: 0.76, blue: 0.82, alpha: 1)]
         case .rain:
-            return [
-                Color(red: 0.39, green: 0.51, blue: 0.65),
-                Color(red: 0.48, green: 0.60, blue: 0.72),
-                Color(red: 0.57, green: 0.67, blue: 0.76)
-            ]
+            return [UIColor(red: 0.38, green: 0.50, blue: 0.65, alpha: 1),
+                    UIColor(red: 0.52, green: 0.63, blue: 0.74, alpha: 1),
+                    UIColor(red: 0.56, green: 0.68, blue: 0.76, alpha: 1)]
         case .snow:
-            return [
-                Color(red: 0.57, green: 0.68, blue: 0.80),
-                Color(red: 0.70, green: 0.78, blue: 0.86),
-                Color(red: 0.76, green: 0.81, blue: 0.87)
-            ]
+            return [UIColor(red: 0.59, green: 0.70, blue: 0.81, alpha: 1),
+                    UIColor(red: 0.69, green: 0.78, blue: 0.87, alpha: 1),
+                    UIColor(red: 0.73, green: 0.82, blue: 0.87, alpha: 1)]
         case .thunder:
-            return [
-                Color(red: 0.23, green: 0.31, blue: 0.46),
-                Color(red: 0.37, green: 0.46, blue: 0.59),
-                Color(red: 0.45, green: 0.52, blue: 0.65)
-            ]
+            return [UIColor(red: 0.26, green: 0.35, blue: 0.49, alpha: 1),
+                    UIColor(red: 0.39, green: 0.48, blue: 0.60, alpha: 1),
+                    UIColor(red: 0.47, green: 0.56, blue: 0.66, alpha: 1)]
         }
     }
-}
 
-private struct CloudSilhouette: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.addEllipse(in: CGRect(x: 0, y: rect.height * 0.40,
-                                   width: rect.width, height: rect.height * 0.60))
-        path.addEllipse(in: CGRect(x: rect.width * 0.22, y: rect.height * 0.12,
-                                   width: rect.width * 0.38, height: rect.height * 0.78))
-        path.addEllipse(in: CGRect(x: rect.width * 0.49, y: rect.height * 0.02,
-                                   width: rect.width * 0.39, height: rect.height * 0.88))
-        return path
+    private func drawWallpaper(size: CGSize) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        // 1x is enough for the intentionally blurred/soft wallpaper and keeps
+        // raster memory low even on high-resolution iPhones.
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { context in
+            let cg = context.cgContext
+            let rect = CGRect(origin: .zero, size: size)
+            let palette = colors
+
+            cg.saveGState()
+            let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: palette.map(\.cgColor) as CFArray,
+                locations: [0, 0.48, 1]
+            )
+            if let gradient {
+                cg.drawLinearGradient(
+                    gradient,
+                    start: .zero,
+                    end: CGPoint(x: 0, y: size.height),
+                    options: []
+                )
+            } else {
+                cg.setFillColor(palette[1].cgColor)
+                cg.fill(rect)
+            }
+            cg.restoreGState()
+
+            if weather.isDay && condition != .thunder {
+                // Single soft radial circle, drawn once into the wallpaper.
+                let center = CGPoint(x: size.width * 0.77,
+                                     y: size.height * (dusk ? 0.48 : 0.20))
+                if let glow = CGGradient(
+                    colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                    colors: [
+                        UIColor.white.withAlphaComponent(dusk ? 0.26 : 0.30).cgColor,
+                        UIColor.white.withAlphaComponent(0).cgColor
+                    ] as CFArray,
+                    locations: [0, 1]
+                ) {
+                    cg.drawRadialGradient(
+                        glow,
+                        startCenter: center, startRadius: 2,
+                        endCenter: center, endRadius: size.width * 0.48,
+                        options: [.drawsAfterEndLocation]
+                    )
+                }
+            }
+
+            // 0..6 simple translucent ellipses. No blur, shadow or offscreen
+            // compositing is used; density follows current cloud-cover data.
+            let clouds = 1 + Int(cloudCover * 5)
+            for i in 0..<clouds {
+                let cloudWidth = size.width * CGFloat(0.68 + Double(i % 3) * 0.24)
+                let cloudHeight = size.height * CGFloat(0.07 + Double(i % 3) * 0.015)
+                let origin = CGPoint(
+                    x: size.width * CGFloat(Double((i * 41 + 3) % 103) / 103) - cloudWidth * 0.4,
+                    y: size.height * CGFloat(Double((i * 27 + 15) % 87) / 100)
+                )
+                cg.setFillColor(
+                    UIColor.white.withAlphaComponent(
+                        (weather.isDay ? 0.07 : 0.035) + Double(cloudCover) * 0.09
+                    ).cgColor
+                )
+                cg.fillEllipse(in: CGRect(origin: origin,
+                                          size: CGSize(width: cloudWidth, height: cloudHeight)))
+                cg.fillEllipse(in: CGRect(x: origin.x + cloudWidth * 0.22,
+                                          y: origin.y - cloudHeight * 0.30,
+                                          width: cloudWidth * 0.48,
+                                          height: cloudHeight * 1.34))
+            }
+
+            if !weather.isDay && cloudCover < 0.75 {
+                cg.setFillColor(UIColor.white.withAlphaComponent(0.64).cgColor)
+                cg.fillEllipse(in: CGRect(x: size.width * 0.77,
+                                          y: size.height * 0.18,
+                                          width: 33, height: 33))
+            }
+            if condition == .rain || condition == .thunder {
+                cg.setStrokeColor(UIColor.white.withAlphaComponent(0.12).cgColor)
+                cg.setLineWidth(1)
+                for i in 0..<18 {
+                    let x = size.width * CGFloat(Double((i * 71 + 9) % 101) / 101)
+                    let y = size.height * CGFloat(Double((i * 37 + 17) % 101) / 101)
+                    cg.move(to: CGPoint(x: x, y: y))
+                    cg.addLine(to: CGPoint(x: x - 3, y: y + 13))
+                }
+                cg.strokePath()
+            }
+            if condition == .snow {
+                cg.setFillColor(UIColor.white.withAlphaComponent(0.39).cgColor)
+                for i in 0..<24 {
+                    cg.fillEllipse(in: CGRect(
+                        x: size.width * CGFloat(Double((i * 73 + 13) % 101) / 101),
+                        y: size.height * CGFloat(Double((i * 41 + 11) % 101) / 101),
+                        width: 2.4, height: 2.4
+                    ))
+                }
+            }
+            // Modest darkening toward bottom preserves white headline contrast.
+            if let shade = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [
+                    UIColor.black.withAlphaComponent(0).cgColor,
+                    UIColor.black.withAlphaComponent(weather.isDay ? 0.15 : 0.19).cgColor
+                ] as CFArray,
+                locations: [0, 1]
+            ) {
+                cg.drawLinearGradient(shade, start: CGPoint(x: 0, y: size.height * 0.42),
+                                      end: CGPoint(x: 0, y: size.height), options: [])
+            }
+        }
     }
 }

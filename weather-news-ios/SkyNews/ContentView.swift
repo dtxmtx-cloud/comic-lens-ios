@@ -35,6 +35,8 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             SkyView(weather: weather.current)
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
             VStack(spacing: 8) {
                 clockAndWeather
                     .padding(.horizontal, 22)
