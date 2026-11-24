@@ -30,6 +30,11 @@ struct WeatherSnapshot {
     var minimum: Double?
     var weatherCode = 3
     var isDay = true
+    var cloudCover: Int?
+    var precipitation: Double?
+    var snowfallAmount: Double?
+    var localHour: Int?
+    var weatherUpdatedAt: Date?
     var airQuality: Int?
     var uvIndex: Double?
     var locationName = "位置情報を確認中"

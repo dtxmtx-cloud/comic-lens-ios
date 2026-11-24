@@ -7,6 +7,10 @@ private struct ForecastResponse: Decodable {
         let temperature_2m: Double
         let weather_code: Int
         let is_day: Int
+        let cloud_cover: Int?
+        let precipitation: Double?
+        let snowfall: Double?
+        let time: String?
     }
     struct Daily: Decodable {
         let temperature_2m_max: [Double]
@@ -31,6 +35,8 @@ final class WeatherService: NSObject, ObservableObject, CLLocationManagerDelegat
     private let geocoder = CLGeocoder()
     private var lastLocation: CLLocation?
     private var requestedPermission = false
+    private var lastForecastRequest: Date = .distantPast
+    private var loadingForecast = false
 
     override init() {
         super.init()
@@ -52,9 +58,14 @@ final class WeatherService: NSObject, ObservableObject, CLLocationManagerDelegat
     }
 
     func refresh() async {
-        if let location = lastLocation {
-            await load(latitude: location.coordinate.latitude,
-                       longitude: location.coordinate.longitude)
+        if manager.authorizationStatus == .authorizedWhenInUse ||
+           manager.authorizationStatus == .authorizedAlways {
+            // Refresh location on return from background.
+            manager.requestLocation()
+            if let location = lastLocation {
+                await load(latitude: location.coordinate.latitude,
+                           longitude: location.coordinate.longitude)
+            }
         } else {
             start()
         }
@@ -95,11 +106,16 @@ final class WeatherService: NSObject, ObservableObject, CLLocationManagerDelegat
     }
 
     private func load(latitude: Double, longitude: Double) async {
+        guard !loadingForecast,
+              Date().timeIntervalSince(lastForecastRequest) >= 45 else { return }
+        loadingForecast = true
+        lastForecastRequest = Date()
+        defer { loadingForecast = false }
         var forecast = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
         forecast.queryItems = [
             URLQueryItem(name: "latitude", value: String(latitude)),
             URLQueryItem(name: "longitude", value: String(longitude)),
-            URLQueryItem(name: "current", value: "temperature_2m,weather_code,is_day"),
+            URLQueryItem(name: "current", value: "temperature_2m,weather_code,is_day,cloud_cover,precipitation,snowfall"),
             URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min,uv_index_max"),
             URLQueryItem(name: "forecast_days", value: "1"),
             URLQueryItem(name: "timezone", value: "auto")
@@ -120,6 +136,17 @@ final class WeatherService: NSObject, ObservableObject, CLLocationManagerDelegat
             current.uvIndex = response.daily.uv_index_max?.first
             current.weatherCode = response.current.weather_code
             current.isDay = response.current.is_day == 1
+            current.cloudCover = response.current.cloud_cover
+            current.precipitation = response.current.precipitation
+            current.snowfallAmount = response.current.snowfall
+            // The returned current.time is local when timezone=auto.
+            if let time = response.current.time, time.count >= 13,
+               let hour = Int(time.dropFirst(11).prefix(2)), (0...23).contains(hour) {
+                current.localHour = hour
+            } else {
+                current.localHour = nil
+            }
+            current.weatherUpdatedAt = Date()
             errorMessage = nil
         } catch {
             errorMessage = "天気を取得できませんでした。"

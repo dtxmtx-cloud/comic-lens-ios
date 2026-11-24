@@ -25,6 +25,14 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("背景") {
+                    Label("現在地の天気・昼夜に連動", systemImage: "cloud.sun.fill")
+                    Text("天候、雲量、降水・降雪、昼夜のデータに応じて背景の色・雲・雨・雪・月の表現を切り替えます。背景は静止画風のままです。約10分ごと、およびアプリに戻った時に更新します。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("位置情報が未許可なら東京の天気を代用します。通信に失敗したときは直近の背景を維持します。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+
                 Section("表示モード") {
                     Picker("ニュース表示", selection: $displayMode) {
                         Text("見出し").tag("headlines")

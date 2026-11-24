@@ -76,3 +76,14 @@ article extraction uses at most two concurrent requests to reduce peaks.
   accents on semitransparent charcoal strips.
 - The gaze-controlled pause applies to either mode, and the publisher link
   remains the sole route to accessing article HTML from a headline.
+
+## Weather-conditioned wallpaper (v0.3.1)
+
+- Static muted blue/gray background preserves the lock-screen aesthetic.
+- Current Open-Meteo weather code, cloud cover, precipitation, snowfall and
+  day/night state change its cloud density, sky palette and weather details.
+- Clear/partly cloudy/overcast/rain/snow/fog/thunder/night are distinct.
+- Local hour can add a slight warm tone near dawn and dusk.
+- Updated roughly every ten minutes and when returning to the app.
+- When location is denied, the weather fallback is explicitly labeled Tokyo.
+  Network failures retain the last successfully received condition.

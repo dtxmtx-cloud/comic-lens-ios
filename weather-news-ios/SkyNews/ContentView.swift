@@ -133,7 +133,12 @@ struct ContentView: View {
         .onChange(of: gazeEnabled) { _, _ in configureGaze() }
         .onChange(of: gazeStopDelay) { _, _ in configureGaze() }
         .onChange(of: gazeResumeDelay) { _, _ in configureGaze() }
-        .onChange(of: scenePhase) { _, _ in configureGaze() }
+        .onChange(of: scenePhase) { _, newPhase in
+            configureGaze()
+            if newPhase == .active {
+                Task { await weather.refresh() }
+            }
+        }
         .onChange(of: showSettings) { _, _ in configureGaze() }
         .onChange(of: displayMode) { _, mode in
             if mode == "fullText" {
